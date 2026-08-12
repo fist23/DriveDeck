@@ -79,7 +79,7 @@ class ComposeMainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("dashboard_auto", MODE_PRIVATE) }
     private var permissionRevision by mutableIntStateOf(0)
     private var updateInfo by mutableStateOf<UpdateChecker.UpdateInfo?>(null)
-    private var updateCheckStarted = false
+    private var lastUpdateCheckAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,8 +89,9 @@ class ComposeMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         permissionRevision++
-        if (!updateCheckStarted) {
-            updateCheckStarted = true
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateCheckAt >= 30_000L) {
+            lastUpdateCheckAt = now
             UpdateChecker.check(this) { info -> runOnUiThread { updateInfo = info } }
         }
     }
@@ -107,6 +108,14 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun packageNameOfApp() = packageName
+
+    private fun installedVersion(): String = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionName
+            ?.takeIf { it.isNotBlank() } ?: BuildConfig.VERSION_NAME
+    } catch (_: Exception) {
+        BuildConfig.VERSION_NAME
+    }
 
     private fun launchPackage(packageName: String) {
         if (packageName.isBlank()) return
@@ -168,20 +177,30 @@ class ComposeMainActivity : ComponentActivity() {
         var firstRun by remember { mutableStateOf(!prefs.getBoolean("onboarding_complete", false)) }
         var accentKey by remember { mutableStateOf(prefs.getString("accent_color", "blue") ?: "blue") }
         DashboardTheme(accentColor(accentKey)) {
-            var updateDismissed by remember { mutableStateOf(false) }
-            if (!updateDismissed) updateInfo?.let { info ->
+            var dismissedUpdateVersion by remember { mutableStateOf("") }
+            updateInfo?.let { info ->
+                val dismissedVersion = prefs.getString(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION, "")
+                if (dismissedUpdateVersion != info.version && dismissedVersion != info.version) {
                 AlertDialog(
-                    onDismissRequest = { updateDismissed = true },
+                    onDismissRequest = {
+                        prefs.edit().putString(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION, info.version).apply()
+                        dismissedUpdateVersion = info.version
+                    },
                     title = { Text("Nova versão disponível") },
                     text = { Text("DriveDeck ${info.version} está disponível.\n\n${info.notes.take(500)}") },
                     confirmButton = {
                         TextButton(onClick = {
-                            updateDismissed = true
+                            prefs.edit().putString(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION, info.version).apply()
+                            dismissedUpdateVersion = info.version
                             if (info.downloadUrl != null) downloadUpdate(info) else openRelease(info.releaseUrl)
                         }) { Text(if (info.downloadUrl != null) "Descarregar" else "Ver release") }
                     },
-                    dismissButton = { TextButton(onClick = { updateDismissed = true }) { Text("Agora não") } }
+                    dismissButton = { TextButton(onClick = {
+                        prefs.edit().putString(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION, info.version).apply()
+                        dismissedUpdateVersion = info.version
+                    }) { Text("Agora não") } }
                 )
+                }
             }
             if (firstRun) {
                 OnboardingScreen(
@@ -208,7 +227,10 @@ class ComposeMainActivity : ComponentActivity() {
                     onBluetooth = { bluetoothAddress = it; prefs.edit().putString("bluetooth_device_address", it).apply() },
                     onStart = ::startCarMode,
                     updateInfo = updateInfo,
-                    onOpenUpdate = { updateDismissed = false },
+                    onOpenUpdate = {
+                        dismissedUpdateVersion = ""
+                        prefs.edit().remove(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION).apply()
+                    },
                     accentKey = accentKey,
                     onAccent = { accentKey = it; applyAccent(it) }
                 )
@@ -371,6 +393,11 @@ class ComposeMainActivity : ComponentActivity() {
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Definições", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Versão instalada ${installedVersion()}",
+                    color = Color(0xFF777780),
+                    style = MaterialTheme.typography.labelSmall
+                )
                 Text("Aparência", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 AccentPicker(accentKey, onAccent)
                 updateInfo?.let { info ->

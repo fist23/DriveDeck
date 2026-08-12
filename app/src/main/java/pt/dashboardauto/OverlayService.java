@@ -862,12 +862,11 @@ public class OverlayService extends Service {
 
     private void syncWindowBounds(float scale) {
         if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        // A janela usa sempre a dimensão máxima. A escala é aplicada ao conjunto
-        // visual, nunca à área de recorte da janela; assim nenhum botão desaparece.
-        int safeWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels - dp(16));
-        int safeHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels - dp(16));
-        windowParams.width = Math.min(safeWidth, Math.max(1, Math.round(baseOverlayWidth * MAX_OVERLAY_SCALE)));
-        windowParams.height = Math.min(safeHeight, Math.max(1, Math.round(baseOverlayHeight * MAX_OVERLAY_SCALE)));
+        // A janela acompanha a caixa visual escalada. Manter uma janela maior
+        // do que o player deixa uma área transparente a capturar toques e pode
+        // desalinhá-los dos botões depois do redimensionamento.
+        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
+        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 

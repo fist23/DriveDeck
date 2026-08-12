@@ -12,6 +12,7 @@ object UpdateChecker {
     const val PREFS_NAME = "dashboard_auto"
     const val PENDING_UPDATE_VERSION = "pending_update_version"
     const val PENDING_UPDATE_DOWNLOAD_ID = "pending_update_download_id"
+    const val DISMISSED_UPDATE_ALERT_VERSION = "dismissed_update_alert_version"
     private val executor = Executors.newSingleThreadExecutor()
 
     data class UpdateInfo(
@@ -25,10 +26,13 @@ object UpdateChecker {
         executor.execute {
             var connection: HttpURLConnection? = null
             try {
-                connection = (URL(latestReleaseUrl).openConnection() as HttpURLConnection).apply {
+                val checkUrl = "$latestReleaseUrl?drivedeck_check=${System.currentTimeMillis()}"
+                connection = (URL(checkUrl).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 5000
                     readTimeout = 5000
+                    useCaches = false
+                    setRequestProperty("Cache-Control", "no-cache")
                     setRequestProperty("Accept", "application/vnd.github+json")
                     setRequestProperty("User-Agent", "DriveDeck/${BuildConfig.VERSION_NAME}")
                 }
@@ -45,17 +49,11 @@ object UpdateChecker {
                 val currentVersion = installedVersion(context)
                 if (remoteVersion.isBlank() || compareVersions(remoteVersion, currentVersion) <= 0) {
                     clearPendingIfInstalled(context, remoteVersion, currentVersion)
-                    return@execute
-                }
-                // Depois de iniciar um download, não voltar a mostrar o mesmo alerta
-                // em cada abertura da app. O estado é limpo quando a versão instalada
-                // passa a ser igual ou superior à release.
-                val pendingVersion = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getString(PENDING_UPDATE_VERSION, "")
-                if (pendingVersion == remoteVersion) {
                     result(null)
                     return@execute
                 }
+                // Mantém a atualização disponível nas definições mesmo depois de
+                // o alerta ter sido dispensado ou o download ter sido iniciado.
                 var apkUrl: String? = null
                 val assets = release.optJSONArray("assets")
                 if (assets != null) {
