@@ -14,11 +14,34 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         if (id < 0L) return;
         DownloadManager manager = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
         if (manager == null) return;
+        long pendingId = context.getSharedPreferences(UpdateChecker.PREFS_NAME, Context.MODE_PRIVATE)
+                .getLong(UpdateChecker.PENDING_UPDATE_DOWNLOAD_ID, -1L);
+        if (pendingId != -1L && pendingId != id) return;
+        android.database.Cursor cursor = null;
+        try {
+            cursor = manager.query(new DownloadManager.Query().setFilterById(id));
+            if (cursor == null || !cursor.moveToFirst()
+                    || cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    != DownloadManager.STATUS_SUCCESSFUL) {
+                UpdateChecker.clearPendingDownload(context);
+                return;
+            }
+        } catch (RuntimeException ignored) {
+            UpdateChecker.clearPendingDownload(context);
+            return;
+        } finally {
+            if (cursor != null) cursor.close();
+        }
         Uri apkUri = manager.getUriForDownloadedFile(id);
-        if (apkUri == null) return;
+        if (apkUri == null) {
+            UpdateChecker.clearPendingDownload(context);
+            return;
+        }
         Intent installer = new Intent(Intent.ACTION_VIEW)
                 .setDataAndType(apkUri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try { context.startActivity(installer); } catch (RuntimeException ignored) { }
+        try { context.startActivity(installer); } catch (RuntimeException ignored) {
+            UpdateChecker.clearPendingDownload(context);
+        }
     }
 }

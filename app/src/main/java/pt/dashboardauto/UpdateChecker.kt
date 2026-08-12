@@ -9,6 +9,9 @@ import java.util.concurrent.Executors
 object UpdateChecker {
     private const val repository = "fist23/DriveDeck"
     private const val latestReleaseUrl = "https://api.github.com/repos/$repository/releases/latest"
+    const val PREFS_NAME = "dashboard_auto"
+    const val PENDING_UPDATE_VERSION = "pending_update_version"
+    const val PENDING_UPDATE_DOWNLOAD_ID = "pending_update_download_id"
     private val executor = Executors.newSingleThreadExecutor()
 
     data class UpdateInfo(
@@ -39,7 +42,17 @@ object UpdateChecker {
                     return@execute
                 }
                 val remoteVersion = release.optString("tag_name").removePrefix("v").trim()
-                if (remoteVersion.isBlank() || compareVersions(remoteVersion, BuildConfig.VERSION_NAME) <= 0) {
+                val currentVersion = installedVersion(context)
+                if (remoteVersion.isBlank() || compareVersions(remoteVersion, currentVersion) <= 0) {
+                    clearPendingIfInstalled(context, remoteVersion, currentVersion)
+                    return@execute
+                }
+                // Depois de iniciar um download, não voltar a mostrar o mesmo alerta
+                // em cada abertura da app. O estado é limpo quando a versão instalada
+                // passa a ser igual ou superior à release.
+                val pendingVersion = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(PENDING_UPDATE_VERSION, "")
+                if (pendingVersion == remoteVersion) {
                     result(null)
                     return@execute
                 }
@@ -61,6 +74,38 @@ object UpdateChecker {
             } finally {
                 connection?.disconnect()
             }
+        }
+    }
+
+    @JvmStatic
+    fun markDownloadStarted(context: Context, version: String, downloadId: Long) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(PENDING_UPDATE_VERSION, version)
+            .putLong(PENDING_UPDATE_DOWNLOAD_ID, downloadId)
+            .apply()
+    }
+
+    @JvmStatic
+    fun clearPendingDownload(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .remove(PENDING_UPDATE_VERSION)
+            .remove(PENDING_UPDATE_DOWNLOAD_ID)
+            .apply()
+    }
+
+    private fun installedVersion(context: Context): String = try {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            ?.takeIf(String::isNotBlank) ?: BuildConfig.VERSION_NAME
+    } catch (_: Exception) {
+        BuildConfig.VERSION_NAME
+    }
+
+    private fun clearPendingIfInstalled(context: Context, remote: String, current: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val pending = prefs.getString(PENDING_UPDATE_VERSION, "") ?: ""
+        if (pending.isNotBlank() && (remote.isBlank() || compareVersions(current, pending) >= 0)) {
+            clearPendingDownload(context)
         }
     }
 
