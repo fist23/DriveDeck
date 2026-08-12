@@ -51,7 +51,32 @@ jobs:
       - name: Restore stable release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.DRIVEDECK_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 --decode > "$RUNNER_TEMP/drivedeck-release.jks"
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import re
+
+          raw = os.environ["KEYSTORE_BASE64"]
+          start = raw.find("MII")
+          if start < 0:
+              raise SystemExit("The release keystore secret does not contain a valid Base64 payload")
+
+          payload_match = re.match(r"[A-Za-z0-9+/=]+", raw[start:])
+          if not payload_match:
+              raise SystemExit("The release keystore Base64 payload is empty")
+
+          payload = payload_match.group(0)
+          payload += "=" * (-len(payload) % 4)
+          keystore = base64.b64decode(payload, validate=True)
+          output_path = os.path.join(os.environ["RUNNER_TEMP"], "drivedeck-release.jks")
+          with open(output_path, "wb") as output:
+              output.write(keystore)
+          PY
+
+          keytool -list -keystore "$RUNNER_TEMP/drivedeck-release.jks" \
+            -storepass "${{ secrets.DRIVEDECK_STORE_PASSWORD }}" \
+            -alias "${{ secrets.DRIVEDECK_KEY_ALIAS }}" >/dev/null
 
       - name: Build signed APK
         env:
