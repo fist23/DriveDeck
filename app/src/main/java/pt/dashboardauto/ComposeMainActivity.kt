@@ -137,6 +137,16 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    private fun applyPlayerOrientation(value: String) {
+        prefs.edit().putString("overlay_orientation", value).apply()
+        if (!OverlayService.isActive()) return
+        val rebuild = Intent(this, OverlayService::class.java)
+            .setAction("pt.dashboardauto.action.REBUILD_LAYOUT")
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(rebuild) else startService(rebuild)
+        } catch (_: RuntimeException) { }
+    }
+
     @Composable
     private fun DashboardApp() {
         val currentPermissionRevision = permissionRevision
@@ -185,7 +195,9 @@ class ComposeMainActivity : ComponentActivity() {
                     onNavigation = { navigation = it; prefs.edit().putString("navigation_app", it).apply() },
                     onMusic = { music = it; prefs.edit().putString("music_app", it).apply() },
                     onBluetooth = { bluetoothAddress = it; prefs.edit().putString("bluetooth_device_address", it).apply() },
-                    onStart = ::startCarMode
+                    onStart = ::startCarMode,
+                    updateInfo = updateInfo,
+                    onOpenUpdate = { updateDismissed = false }
                 )
             }
         }
@@ -201,10 +213,11 @@ class ComposeMainActivity : ComponentActivity() {
             .setTitle("DriveDeck ${info.version}")
             .setDescription("A descarregar atualização")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "dashboard-auto-${info.version}.apk")
+            .setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "drivedeck-${info.version}.apk")
             .setMimeType("application/vnd.android.package-archive")
         val manager = getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
-        manager.enqueue(request)
+        val downloadId = manager.enqueue(request)
+        UpdateChecker.markDownloadStarted(this, info.version, downloadId)
         Toast.makeText(this, "Atualização a ser descarregada", Toast.LENGTH_LONG).show()
     }
 
@@ -263,7 +276,7 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     @OptIn(ExperimentalMaterial3Api::class)
-    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit) {
+    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, onOpenUpdate: () -> Unit) {
         var settings by remember { mutableStateOf(false) }
         val navigationAvailable = apps.any { it.packageName == navigation }
         val musicAvailable = apps.any { it.packageName == music }
@@ -294,7 +307,9 @@ class ComposeMainActivity : ComponentActivity() {
                         bluetoothAddress = bluetoothAddress,
                         onNavigation = onNavigation,
                         onMusic = onMusic,
-                        onBluetooth = onBluetooth
+                        onBluetooth = onBluetooth,
+                        updateInfo = updateInfo,
+                        onOpenUpdate = onOpenUpdate
                     )
                 }
                 OutlinedButton(onClick = { settings = !settings }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Build, null); Spacer(Modifier.size(8.dp)); Text(if (settings) "Fechar definições" else "Abrir definições") }
@@ -311,7 +326,9 @@ class ComposeMainActivity : ComponentActivity() {
         bluetoothAddress: String,
         onNavigation: (String) -> Unit,
         onMusic: (String) -> Unit,
-        onBluetooth: (String) -> Unit
+        onBluetooth: (String) -> Unit,
+        updateInfo: UpdateChecker.UpdateInfo?,
+        onOpenUpdate: () -> Unit
     ) {
         var bluetoothMode by remember { mutableStateOf(prefs.getString("bluetooth_launch_mode", "car_mode") ?: "car_mode") }
         var autoplay by remember { mutableStateOf(prefs.getBoolean("auto_play_music_on_car_mode", true)) }
@@ -319,10 +336,16 @@ class ComposeMainActivity : ComponentActivity() {
         var closeOnDisconnect by remember { mutableStateOf(prefs.getBoolean("close_on_bluetooth_disconnect", true)) }
         var pauseOnDisconnect by remember { mutableStateOf(prefs.getBoolean("pause_music_on_bluetooth_disconnect", false)) }
         var expandedByDefault by remember { mutableStateOf(prefs.getBoolean("overlay_expanded", false)) }
+        var playerOrientation by remember { mutableStateOf(prefs.getString("overlay_orientation", "auto") ?: "auto") }
+        var controlSize by remember { mutableStateOf(prefs.getString("overlay_control_size", "normal") ?: "normal") }
         var returnNavigationDuringCall by remember { mutableStateOf(prefs.getBoolean("return_navigation_during_call", true)) }
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Definições", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                updateInfo?.let { info ->
+                    SettingsRow(Icons.Rounded.Notifications, "Nova versão disponível", false, onClick = onOpenUpdate)
+                    Text("DriveDeck ${info.version} pronta para descarregar", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
+                }
                 AppPicker("Navegação", apps, navigation, onNavigation, AppCategory.NAVIGATION)
                 AppPicker("Música", apps, music, onMusic, AppCategory.MUSIC)
                 BluetoothPicker(bluetooth, bluetoothAddress, onBluetooth)
@@ -348,6 +371,17 @@ class ComposeMainActivity : ComponentActivity() {
                 SettingsRow(Icons.Rounded.KeyboardArrowDown, "Abrir player expandido", expandedByDefault) {
                     expandedByDefault = !expandedByDefault
                     prefs.edit().putBoolean("overlay_expanded", expandedByDefault).apply()
+                }
+                Text("Orientação do player", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                PlayerOrientationPicker(playerOrientation) {
+                    playerOrientation = it
+                    applyPlayerOrientation(it)
+                }
+                Text("Tamanho dos controlos", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                ControlSizePicker(controlSize) {
+                    controlSize = it
+                    prefs.edit().putString("overlay_control_size", it).apply()
+                    applyPlayerOrientation(playerOrientation)
                 }
                 SettingsRow(Icons.Rounded.Place, "Voltar à navegação durante chamadas", returnNavigationDuringCall) {
                     if (!PermissionManager.canReadPhoneState(this@ComposeMainActivity)) {
@@ -382,7 +416,10 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     private fun AudioFavoritesPicker(apps: List<AppItem>) {
-        val audioApps = apps.filter { matchesCategory(it, AppCategory.MUSIC) }
+        // Se a deteção automática não reconhecer a app (rádio, player OEM, etc.),
+        // continua disponível através da lista completa de apps instaladas.
+        val suggestedAudioApps = apps.filter { matchesCategory(it, AppCategory.MUSIC) }
+        val audioApps = if (suggestedAudioApps.isNotEmpty()) suggestedAudioApps else apps
         var favorites by remember {
             mutableStateOf(prefs.getString("audio_favorites", "").orEmpty().split(",").filter(String::isNotBlank).toSet())
         }
@@ -480,6 +517,44 @@ class ComposeMainActivity : ComponentActivity() {
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("Abrir Car Mode completo") }, onClick = { onChange("car_mode"); expanded = false })
             DropdownMenuItem(text = { Text("Iniciar apenas a música") }, onClick = { onChange("music_only"); expanded = false })
+        }
+    }
+
+    @Composable
+    private fun PlayerOrientationPicker(value: String, onChange: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        val label = when (value) {
+            "vertical" -> "Vertical — controlos em coluna"
+            "horizontal" -> "Horizontal — controlos em linha"
+            else -> "Automático — seguir orientação do ecrã"
+        }
+        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(label, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher orientação")
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(text = { Text("Automático — seguir orientação do ecrã") }, onClick = { onChange("auto"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Vertical — controlos em coluna") }, onClick = { onChange("vertical"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Horizontal — controlos em linha") }, onClick = { onChange("horizontal"); menuExpanded = false })
+        }
+    }
+
+    @Composable
+    private fun ControlSizePicker(value: String, onChange: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        val label = when (value) {
+            "compact" -> "Compacto — ocupa menos espaço"
+            "large" -> "Grande — mais fácil de tocar"
+            else -> "Normal — equilíbrio entre espaço e acesso"
+        }
+        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(label, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher tamanho dos controlos")
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(text = { Text("Normal — equilíbrio entre espaço e acesso") }, onClick = { onChange("normal"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Compacto — ocupa menos espaço") }, onClick = { onChange("compact"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Grande — mais fácil de tocar") }, onClick = { onChange("large"); menuExpanded = false })
         }
     }
 

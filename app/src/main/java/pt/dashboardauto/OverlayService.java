@@ -9,8 +9,11 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -19,31 +22,45 @@ import android.view.animation.AccelerateInterpolator;
 import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.FrameLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.content.res.Configuration;
 
 public class OverlayService extends Service {
+    private static volatile boolean active;
+    private static final float MIN_OVERLAY_SCALE = .85f;
+    private static final float MAX_OVERLAY_SCALE = 1.25f;
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
     private static final String ACTION_RESET_LAYOUT = "pt.dashboardauto.action.RESET_LAYOUT";
+    private static final String ACTION_REBUILD_LAYOUT = "pt.dashboardauto.action.REBUILD_LAYOUT";
     private WindowManager manager;
-    private LinearLayout overlay;
+    private FrameLayout overlay;
     private TextView track;
     private TextView artist;
     private TextView album;
     private TextView timeLabel;
     private ImageView artwork;
+    private Bitmap renderedArtwork;
     private ImageButton playButton;
     private SeekBar progressBar;
     private long durationMs;
     private boolean userSeeking;
     private TextView dropZone;
+    private WindowManager.LayoutParams dropZoneParams;
+    private boolean dropZoneTop;
     private boolean playingState;
+    private String lastTrackValue;
+    private String pendingTrackValue;
+    private boolean trackTransitionRunning;
     private long optimisticPlaybackUntil;
     private boolean landscape;
+    private boolean physicalLandscape;
     private boolean expanded;
     private boolean miniPlayerHidden;
     private WindowManager.LayoutParams windowParams;
+    private int baseOverlayWidth;
+    private int baseOverlayHeight;
     private float downX, downY;
     private int startX, startY;
     private boolean dragMoved;
@@ -51,7 +68,7 @@ public class OverlayService extends Service {
     private final Runnable refreshTrack = new Runnable() {
         @Override public void run() {
             boolean currentLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
-            if (overlay != null && currentLandscape != landscape) {
+            if (overlay != null && currentLandscape != physicalLandscape) {
                 removeOverlay();
                 addOverlay();
                 return;
@@ -63,6 +80,7 @@ public class OverlayService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        active = true;
         expanded = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getBoolean("overlay_expanded", false);
         createNotification();
         if (PermissionManager.canDrawOverlay(this)) addOverlay();
@@ -78,6 +96,11 @@ public class OverlayService extends Service {
             resetLayout();
             return START_NOT_STICKY;
         }
+        if (intent != null && ACTION_REBUILD_LAYOUT.equals(intent.getAction())) {
+            if (overlay != null) removeOverlay();
+            if (PermissionManager.canDrawOverlay(this)) addOverlay();
+            return START_NOT_STICKY;
+        }
         if (overlay == null && PermissionManager.canDrawOverlay(this)) addOverlay();
         if (intent != null && intent.getBooleanExtra("launch_apps", false)) CarModeLauncher.openConfiguredApps(this, intent.getStringExtra("launch_mode"));
         return START_NOT_STICKY;
@@ -85,23 +108,27 @@ public class OverlayService extends Service {
 
     private void addOverlay() {
         manager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        landscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
-        overlay = new LinearLayout(this);
-        overlay.setOrientation(landscape && !expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
-        overlay.setGravity(Gravity.CENTER);
-        overlay.setPadding(dp(8), dp(4), dp(8), dp(4));
-        overlay.setBackground(panelBackground());
+        physicalLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+        String orientation = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("overlay_orientation", "auto");
+        landscape = "horizontal".equals(orientation) || ("auto".equals(orientation) && physicalLandscape);
+        overlay = new FrameLayout(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(landscape && !expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER);
+        content.setPadding(dp(8), dp(4), dp(8), dp(4));
+        content.setBackground(panelBackground());
+        FrameLayout mediaContainer = new FrameLayout(this);
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
         mediaInfo.setPadding(dp(expanded ? 8 : 6), dp(expanded ? 8 : 5), dp(expanded ? 10 : 8), dp(expanded ? 8 : 5));
-        mediaInfo.setBackground(mediaBackground());
+        mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
         mediaInfo.setOnClickListener(v -> openConfigured("music_app"));
         mediaInfo.setOnTouchListener(this::dragOverlay);
         artwork = new ImageView(this);
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.setBackgroundColor(Color.rgb(65, 27, 40));
-        int artworkSize = dp(expanded ? 58 : 44);
+        int artworkSize = controlDp(expanded ? 58 : 44);
         mediaInfo.addView(artwork, new LinearLayout.LayoutParams(artworkSize, artworkSize));
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
@@ -142,13 +169,21 @@ public class OverlayService extends Service {
         }
         mediaInfo.addView(labels, new LinearLayout.LayoutParams(0, -1, 1f));
         ImageButton expandButton = actionButton(expanded ? R.drawable.ic_collapse : R.drawable.ic_expand, expanded ? "Recolher player" : "Expandir player", true);
-        expandButton.setOnClickListener(v -> toggleExpanded());
+        expandButton.setOnClickListener(v -> {
+            v.animate().rotationBy(expanded ? -180f : 180f).setDuration(180).start();
+            toggleExpanded();
+        });
         mediaInfo.addView(expandButton, mediaButtonParams());
-        overlay.addView(mediaInfo, new LinearLayout.LayoutParams(landscape && !expanded ? dp(240) : dp(330), dp(expanded ? 102 : 58)));
+        mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
+        addResizeHandle(mediaContainer);
+        int mediaWidth = landscape && !expanded
+                ? dp(240)
+                : Math.min(dp(480), getResources().getDisplayMetrics().widthPixels - dp(32));
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(dp(280), mediaWidth), controlDp(expanded ? 102 : 58)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        if (!landscape || expanded) overlay.addView(controls, new LinearLayout.LayoutParams(-2, dp(expanded ? 84 : 54)));
+        if (!landscape || expanded) content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 84 : 54)));
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next, R.drawable.ic_home};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte", "Abrir Dashboard"};
         for (int i = 0; i < icons.length; i++) {
@@ -159,20 +194,22 @@ public class OverlayService extends Service {
             }
             final int actionIndex = i;
             b.setOnClickListener(v -> handleAction(actionIndex));
-            (landscape && !expanded ? overlay : controls).addView(b, buttonParams());
+            (landscape && !expanded ? content : controls).addView(b, buttonParams());
         }
         if (expanded) {
-            if (landscape) addExpandedActions(overlay);
+            if (landscape) addExpandedActions(content);
             else {
                 LinearLayout extra = new LinearLayout(this);
                 extra.setOrientation(LinearLayout.HORIZONTAL);
                 extra.setGravity(Gravity.CENTER);
                 addExpandedActions(extra);
-                overlay.addView(extra, new LinearLayout.LayoutParams(-2, dp(84)));
+                content.addView(extra, new LinearLayout.LayoutParams(-2, controlDp(84)));
             }
-            addResizeHandle();
         }
-        float savedScale = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f);
+        // O content fica num FrameLayout independente para que o tamanho da janela
+        // possa acompanhar a escala sem esticar novamente os botões por dentro.
+        overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        float savedScale = clampOverlayScale(getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f));
         overlay.setScaleX(savedScale);
         overlay.setScaleY(savedScale);
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
@@ -182,11 +219,16 @@ public class OverlayService extends Service {
         windowParams = params;
         try {
             manager.addView(overlay, params);
+            overlay.post(() -> {
+                baseOverlayWidth = overlay.getMeasuredWidth();
+                baseOverlayHeight = overlay.getMeasuredHeight();
+                syncWindowBounds(savedScale);
+                clampOverlayPosition();
+            });
             overlay.setAlpha(0f);
             overlay.setScaleX(savedScale * .92f);
             overlay.setScaleY(savedScale * .92f);
             overlay.animate().alpha(1f).scaleX(savedScale).scaleY(savedScale).setDuration(220).start();
-            overlay.post(this::clampOverlayPosition);
             refreshHandler.post(refreshTrack);
         } catch (WindowManager.BadTokenException | SecurityException error) {
             overlay = null;
@@ -209,13 +251,16 @@ public class OverlayService extends Service {
         return background;
     }
 
+    private RippleDrawable rippleBackground(GradientDrawable content, int rippleColor) {
+        return new RippleDrawable(ColorStateList.valueOf(rippleColor), content, null);
+    }
+
     private void updateTrack() {
         if (track == null) return;
         String value = MusicController.currentTrack(this);
-        String[] parts = value.split("\\n", 2);
-        track.setText(parts.length > 0 ? parts[0] : "Sem música ativa");
-        if (artist != null) artist.setText(parts.length > 1 ? parts[1] : "");
-        if (album != null) album.setText(expanded ? MusicController.currentAlbum(this) : "");
+        boolean trackChanged = lastTrackValue != null && !lastTrackValue.equals(value);
+        lastTrackValue = value;
+        if (trackChanged) animateTrackChange(value); else renderTrack(value);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
         setPlayButtonState(playingState, false);
@@ -225,10 +270,59 @@ public class OverlayService extends Service {
             progressBar.setProgress(durationMs <= 0 ? 0 : (int) Math.min(1000L, playback.positionMs * 1000L / durationMs));
             if (timeLabel != null) timeLabel.setText(formatTime(playback.positionMs) + " / " + formatTime(durationMs));
         }
+    }
+
+    private void renderTrack(String value) {
+        String[] parts = value.split("\\n", 2);
+        track.setText(parts.length > 0 && !parts[0].isBlank() ? parts[0] : "Sem música ativa");
+        if (artist != null) artist.setText(parts.length > 1 ? parts[1] : "");
+        if (album != null) album.setText(expanded ? MusicController.currentAlbum(this) : "");
         if (artwork != null) {
-            android.graphics.Bitmap bitmap = MusicController.currentArtwork(this);
-            if (bitmap != null) artwork.setImageBitmap(bitmap); else artwork.setImageDrawable(null);
+            Bitmap bitmap = MusicController.currentArtwork(this);
+            if (bitmap != renderedArtwork) {
+                renderedArtwork = bitmap;
+                artwork.animate().cancel();
+                artwork.setAlpha(0f);
+                if (bitmap != null) artwork.setImageBitmap(bitmap); else artwork.setImageDrawable(null);
+                artwork.animate().alpha(1f).setDuration(180).start();
+            }
         }
+    }
+
+    private void animateTrackChange(String value) {
+        if (overlay == null) {
+            renderTrack(value);
+            return;
+        }
+        if (trackTransitionRunning) {
+            pendingTrackValue = value;
+            return;
+        }
+        trackTransitionRunning = true;
+        pendingTrackValue = null;
+        float distance = Math.max(dp(96), overlay.getWidth() * .72f);
+        overlay.animate()
+                .translationX(-distance)
+                .alpha(.12f)
+                .setDuration(145)
+                .withEndAction(() -> {
+                    renderTrack(value);
+                    overlay.setTranslationX(distance);
+                    overlay.animate()
+                            .translationX(0f)
+                            .alpha(1f)
+                            .setDuration(225)
+                            .withEndAction(() -> {
+                                trackTransitionRunning = false;
+                                if (pendingTrackValue != null && !pendingTrackValue.equals(value)) {
+                                    String next = pendingTrackValue;
+                                    pendingTrackValue = null;
+                                    animateTrackChange(next);
+                                }
+                            })
+                            .start();
+                })
+                .start();
     }
 
     private ImageButton actionButton(int icon, String description, boolean accent) {
@@ -237,12 +331,13 @@ public class OverlayService extends Service {
         button.setColorFilter(accent ? Color.rgb(255, 55, 95) : Color.WHITE);
         button.setContentDescription(description);
         button.setTooltipText(description);
-        button.setPadding(dp(expanded ? 14 : 10), dp(expanded ? 14 : 10), dp(expanded ? 14 : 10), dp(expanded ? 14 : 10));
+        button.setPadding(controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10));
         button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         GradientDrawable background = new GradientDrawable();
         background.setColor(accent ? Color.rgb(69, 27, 42) : Color.rgb(36, 36, 45));
         background.setCornerRadius(dp(14));
         button.setBackground(background);
+        button.setBackground(rippleBackground(background, Color.rgb(110, 110, 128)));
         button.setOnTouchListener((view, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -263,10 +358,10 @@ public class OverlayService extends Service {
             playButton.setImageResource(icon);
             return;
         }
-        playButton.animate().alpha(.35f).setDuration(70).withEndAction(() -> {
+        playButton.animate().rotationBy(180f).alpha(.35f).setDuration(90).withEndAction(() -> {
             if (playButton == null) return;
             playButton.setImageResource(icon);
-            playButton.animate().alpha(1f).setDuration(130).start();
+            playButton.animate().rotation(0f).alpha(1f).setDuration(150).start();
         }).start();
     }
 
@@ -283,9 +378,9 @@ public class OverlayService extends Service {
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        int size = dp(expanded ? 72 : 54);
+        int size = controlDp(expanded ? 72 : 54);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
-        int margin = dp(expanded ? 5 : 2);
+        int margin = controlDp(expanded ? 5 : 2);
         params.setMargins(margin, margin, margin, margin);
         return params;
     }
@@ -296,11 +391,15 @@ public class OverlayService extends Service {
             downX = event.getRawX(); downY = event.getRawY();
             startX = windowParams.x; startY = windowParams.y;
             dragMoved = false;
-            showDropZone();
+            showDropZone(false);
             return true;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
             if (Math.abs(event.getRawX() - downX) > dp(8) || Math.abs(event.getRawY() - downY) > dp(8)) dragMoved = true;
+            if (dragMoved) {
+                boolean movingToTop = event.getRawY() < downY - dp(12);
+                setDropZoneMode(movingToTop);
+            }
             int screenWidth = getResources().getDisplayMetrics().widthPixels;
             int screenHeight = getResources().getDisplayMetrics().heightPixels;
             int draggedX = Math.max(0, startX + (int) (event.getRawX() - downX));
@@ -321,9 +420,11 @@ public class OverlayService extends Service {
         if (event.getActionMasked() == MotionEvent.ACTION_UP) {
             float deltaY = event.getRawY() - downY;
             float deltaX = event.getRawX() - downX;
-            boolean overDropZone = event.getRawY() > getResources().getDisplayMetrics().heightPixels - dp(180);
+            int screenHeight = getResources().getDisplayMetrics().heightPixels;
+            boolean overTopZone = event.getRawY() <= dp(112);
+            boolean overDropZone = event.getRawY() > screenHeight - dp(180);
             hideDropZone();
-            if (dragMoved && !expanded && deltaY < -dp(64) && Math.abs(deltaY) > Math.abs(deltaX) * 1.2f) {
+            if (dragMoved && !expanded && overTopZone && deltaY < -dp(64) && Math.abs(deltaY) > Math.abs(deltaX) * 1.2f) {
                 toggleExpanded();
                 return true;
             }
@@ -382,11 +483,22 @@ public class OverlayService extends Service {
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
+    private int controlDp(int value) {
+        String size = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("overlay_control_size", "normal");
+        float factor = "compact".equals(size) ? .90f : ("large".equals(size) ? 1.12f : 1f);
+        return Math.max(dp(2), Math.round(dp(value) * factor));
+    }
+
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
     private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
 
     private void removeOverlay() {
         refreshHandler.removeCallbacks(refreshTrack);
+        if (overlay != null) {
+            overlay.animate().cancel();
+            overlay.setTranslationX(0f);
+            overlay.setTranslationY(0f);
+        }
         if (overlay != null && manager != null) {
             try { manager.removeView(overlay); } catch (IllegalArgumentException ignored) { }
         }
@@ -399,8 +511,12 @@ public class OverlayService extends Service {
         progressBar = null;
         durationMs = 0L;
         artwork = null;
+        renderedArtwork = null;
         playButton = null;
         windowParams = null;
+        lastTrackValue = null;
+        pendingTrackValue = null;
+        trackTransitionRunning = false;
     }
 
     private void handleAction(int index) {
@@ -486,10 +602,11 @@ public class OverlayService extends Service {
                 .start();
     }
 
-    private void showDropZone() {
+    private void showDropZone(boolean top) {
         if (dropZone != null || manager == null) return;
+        dropZoneTop = top;
         dropZone = new TextView(this);
-        dropZone.setText("↓  Soltar para fechar  ↓");
+        dropZone.setText(top ? "↑  Soltar para expandir  ↑" : "↓  Soltar para fechar  ↓");
         dropZone.setTextColor(Color.WHITE);
         dropZone.setTextSize(12);
         dropZone.setGravity(Gravity.CENTER);
@@ -499,13 +616,23 @@ public class OverlayService extends Service {
                 dp(210), dp(48), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(10);
+        params.gravity = (top ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
+        params.y = top ? dp(18) : dp(10);
+        dropZoneParams = params;
         try {
             manager.addView(dropZone, params);
             dropZone.setAlpha(0f);
             dropZone.animate().alpha(1f).setDuration(140).start();
         } catch (RuntimeException ignored) { dropZone = null; }
+    }
+
+    private void setDropZoneMode(boolean top) {
+        if (dropZone == null || dropZoneParams == null || dropZoneTop == top) return;
+        dropZoneTop = top;
+        dropZone.setText(top ? "↑  Soltar para expandir  ↑" : "↓  Soltar para fechar  ↓");
+        dropZoneParams.gravity = (top ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
+        dropZoneParams.y = top ? dp(18) : dp(10);
+        try { manager.updateViewLayout(dropZone, dropZoneParams); } catch (IllegalArgumentException ignored) { }
     }
 
     private GradientDrawable dropZoneBackground(boolean active) {
@@ -520,27 +647,32 @@ public class OverlayService extends Service {
         if (dropZone == null) return;
         TextView current = dropZone;
         dropZone = null;
+        dropZoneParams = null;
         current.animate().alpha(0f).setDuration(100).withEndAction(() -> {
             try { if (manager != null) manager.removeView(current); } catch (IllegalArgumentException ignored) { }
         }).start();
     }
 
     private LinearLayout.LayoutParams mediaButtonParams() {
-        int size = dp(expanded ? 64 : 52);
+        int size = controlDp(expanded ? 64 : 52);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         params.setMargins(dp(3), dp(3), dp(3), dp(3));
         return params;
     }
 
-    private void addResizeHandle() {
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+    private void addResizeHandle(FrameLayout parent) {
         ImageButton handle = new ImageButton(this);
         handle.setImageResource(R.drawable.ic_resize);
         handle.setContentDescription("Redimensionar player");
         handle.setTooltipText("Arrastar para redimensionar");
-        handle.setPadding(dp(9), dp(9), dp(9), dp(9));
+        // Ícone discreto com área de toque confortável para utilização em condução.
+        handle.setPadding(dp(12), dp(12), dp(12), dp(12));
+        handle.setMinimumWidth(dp(44));
+        handle.setMinimumHeight(dp(44));
         handle.setBackgroundColor(Color.TRANSPARENT);
+        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.BOTTOM);
+        handleParams.setMargins(0, 0, dp(1), dp(1));
+        parent.addView(handle, handleParams);
         final float[] initialScale = {1f};
         final float[] initialX = {0f};
         final float[] initialY = {0f};
@@ -555,21 +687,47 @@ public class OverlayService extends Service {
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
                 float horizontalDelta = event.getRawX() - initialX[0];
                 float verticalDelta = event.getRawY() - initialY[0];
-                float delta = Math.max(horizontalDelta, verticalDelta) / dp(420f);
-                float scale = Math.max(.72f, Math.min(1.45f, initialScale[0] + delta));
-                overlay.setScaleX(scale);
-                overlay.setScaleY(scale);
+                // O gesto acompanha a diagonal do canto e mantém a proporção do player inteiro.
+                float diagonalDelta = (horizontalDelta + verticalDelta) * .5f;
+                float delta = diagonalDelta / dp(300f);
+                float scale = clampOverlayScale(initialScale[0] + delta);
+                applyOverlayScale(scale, false);
                 return true;
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putFloat("overlay_scale", overlay.getScaleX()).apply();
+                applyOverlayScale(overlay.getScaleX(), true);
                 if (event.getActionMasked() == MotionEvent.ACTION_UP) view.performClick();
                 return true;
             }
             return true;
         });
-        row.addView(handle, new LinearLayout.LayoutParams(dp(48), dp(42)));
-        overlay.addView(row, new LinearLayout.LayoutParams(-1, dp(42)));
+    }
+
+    private void applyOverlayScale(float scale, boolean persist) {
+        if (overlay == null) return;
+        float clampedScale = clampOverlayScale(scale);
+        overlay.setPivotX(0f);
+        overlay.setPivotY(0f);
+        overlay.setScaleX(clampedScale);
+        overlay.setScaleY(clampedScale);
+        syncWindowBounds(clampedScale);
+        if (persist) {
+            getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
+                    .putFloat("overlay_scale", clampedScale)
+                    .apply();
+        }
+    }
+
+    private float clampOverlayScale(float scale) {
+        if (Float.isNaN(scale) || Float.isInfinite(scale)) return 1f;
+        return Math.max(MIN_OVERLAY_SCALE, Math.min(MAX_OVERLAY_SCALE, scale));
+    }
+
+    private void syncWindowBounds(float scale) {
+        if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
+        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
+        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
+        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
     private void runMediaAction(Runnable action) {
@@ -655,7 +813,9 @@ public class OverlayService extends Service {
 
     @Override public void onDestroy() {
         removeOverlay();
+        active = false;
         super.onDestroy();
     }
+    public static boolean isActive() { return active; }
     @Override public IBinder onBind(Intent intent) { return null; }
 }
