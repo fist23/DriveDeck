@@ -434,14 +434,16 @@ public class OverlayService extends Service {
             int draggedY = Math.max(0, startY + (int) (event.getRawY() - downY));
             int playerWidth = visualOverlayWidth();
             int playerHeight = visualOverlayHeight();
-            int targetX = Math.max(0, (screenWidth - playerWidth) / 2);
             int targetY = Math.max(0, screenHeight - playerHeight - dp(18));
             boolean approachingBottom = event.getRawY() >= downY;
             float normalizedDistance = approachingBottom
                     ? Math.max(0f, Math.min(1f, (event.getRawY() - (screenHeight - dp(320))) / (float) dp(320)))
                     : 0f;
             float magnetProgress = normalizedDistance * normalizedDistance * (3f - 2f * normalizedDistance);
-            int nextX = Math.max(0, (int) (draggedX + (targetX - draggedX) * magnetProgress * .9f));
+            // O íman atua apenas no eixo vertical. O eixo horizontal deve
+            // continuar totalmente livre para o utilizador posicionar o
+            // player onde quiser, incluindo tablets e ecrãs largos.
+            int nextX = draggedX;
             int nextY = Math.max(0, (int) (draggedY + (targetY - draggedY) * magnetProgress * .9f));
             nextX = Math.min(nextX, Math.max(0, screenWidth - playerWidth));
             nextY = Math.min(nextY, Math.max(0, screenHeight - playerHeight));
@@ -499,11 +501,9 @@ public class OverlayService extends Service {
                 hideMiniPlayer();
                 return true;
             }
-            int screenWidth = getResources().getDisplayMetrics().widthPixels;
-            int playerWidth = visualOverlayWidth();
-            int rightEdge = Math.max(0, screenWidth - playerWidth);
-            if (windowParams.x <= dp(28)) windowParams.x = 0;
-            else if (windowParams.x >= rightEdge - dp(28)) windowParams.x = rightEdge;
+            // Não fazer snap lateral no fim do gesto: o arrastamento deve
+            // preservar a posição escolhida, sem colar o player à esquerda
+            // ou à direita.
             try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putInt("overlay_x", windowParams.x).putInt("overlay_y", windowParams.y).apply();
             return true;
@@ -546,8 +546,8 @@ public class OverlayService extends Service {
         if (overlay == null || windowParams == null || manager == null) return;
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int maxX = Math.max(0, screenWidth - overlay.getWidth());
-        int maxY = Math.max(0, screenHeight - overlay.getHeight());
+        int maxX = Math.max(0, screenWidth - visualOverlayWidth());
+        int maxY = Math.max(0, screenHeight - visualOverlayHeight());
         int clampedX = Math.max(0, Math.min(windowParams.x, maxX));
         int clampedY = Math.max(0, Math.min(windowParams.y, maxY));
         if (clampedX == windowParams.x && clampedY == windowParams.y) return;
@@ -831,6 +831,9 @@ public class OverlayService extends Service {
         overlay.setScaleY(clampedScale);
         positionResizeHandle();
         syncWindowBounds(clampedScale);
+        // Ao aumentar o player, conserva a posição escolhida mas garante que
+        // a nova caixa visual continua totalmente dentro do ecrã.
+        clampOverlayPosition();
         if (persist) {
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
                     .putFloat("overlay_scale", clampedScale)
@@ -862,11 +865,13 @@ public class OverlayService extends Service {
 
     private void syncWindowBounds(float scale) {
         if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        // A janela acompanha a caixa visual escalada. Manter uma janela maior
-        // do que o player deixa uma área transparente a capturar toques e pode
-        // desalinhá-los dos botões depois do redimensionamento.
-        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
-        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
+        // A View é escalada visualmente, mas a janela mantém o tamanho lógico
+        // original. Reduzir também os bounds da WindowManager fazia o conteúdo
+        // escalado ser recortado e deixava os targets tácteis deslocados.
+        // Assim, a transformação é aplicada ao player inteiro e o sistema de
+        // toque continua a usar a mesma origem (canto superior esquerdo).
+        windowParams.width = Math.max(1, baseOverlayWidth);
+        windowParams.height = Math.max(1, baseOverlayHeight);
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
