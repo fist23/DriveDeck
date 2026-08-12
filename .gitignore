@@ -1,0 +1,8 @@
+.drivedeck-secrets/
+*.jks
+*.keystore
+*.p12
+app/build/
+.gradle/
+.kotlin/
+*.hprof
