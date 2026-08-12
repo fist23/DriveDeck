@@ -31,7 +31,7 @@ import android.content.res.Configuration;
 
 public class OverlayService extends Service {
     private static volatile boolean active;
-    private static final float MIN_OVERLAY_SCALE = .85f;
+    private static final float MIN_OVERLAY_SCALE = .70f;
     private static final float MAX_OVERLAY_SCALE = 1.25f;
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
     private static final String ACTION_RESET_LAYOUT = "pt.dashboardauto.action.RESET_LAYOUT";
@@ -45,6 +45,7 @@ public class OverlayService extends Service {
     private ImageView artwork;
     private Bitmap renderedArtwork;
     private ImageButton playButton;
+    private ImageButton resizeHandle;
     private SeekBar progressBar;
     private long durationMs;
     private boolean userSeeking;
@@ -188,7 +189,6 @@ public class OverlayService extends Service {
         });
         mediaInfo.addView(expandButton, mediaButtonParams());
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
-        addResizeHandle(mediaContainer);
         int mediaWidth = landscape && !expanded
                 ? dp(240)
                 : Math.min(dp(480), getResources().getDisplayMetrics().widthPixels - dp(32));
@@ -222,6 +222,8 @@ public class OverlayService extends Service {
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
         overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        // O redimensionador pertence ao player completo, separado do botão de expandir.
+        addResizeHandle(overlay);
         float savedScale = clampOverlayScale(getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f));
         overlay.setScaleX(savedScale);
         overlay.setScaleY(savedScale);
@@ -235,6 +237,7 @@ public class OverlayService extends Service {
             overlay.post(() -> {
                 baseOverlayWidth = overlay.getMeasuredWidth();
                 baseOverlayHeight = overlay.getMeasuredHeight();
+                positionResizeHandle();
                 syncWindowBounds(savedScale);
                 clampOverlayPosition();
             });
@@ -760,19 +763,20 @@ public class OverlayService extends Service {
 
     private void addResizeHandle(FrameLayout parent) {
         ImageButton handle = new ImageButton(this);
+        resizeHandle = handle;
         handle.setImageResource(R.drawable.ic_resize);
         handle.setContentDescription("Redimensionar player");
         handle.setTooltipText("Arrastar para redimensionar");
         // Ícone discreto com área de toque confortável para utilização em condução.
-        handle.setPadding(dp(13), dp(13), dp(13), dp(13));
-        handle.setMinimumWidth(dp(44));
-        handle.setMinimumHeight(dp(44));
+        handle.setPadding(dp(7), dp(7), dp(7), dp(7));
+        handle.setMinimumWidth(dp(32));
+        handle.setMinimumHeight(dp(32));
         handle.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         handle.setAlpha(.82f);
         handle.setBackgroundColor(Color.TRANSPARENT);
         // Área visual pequena no canto; os 44dp continuam a ser apenas a área
         // de toque para não obrigar a acertar num ícone minúsculo.
-        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.BOTTOM);
+        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.START);
         handleParams.setMargins(0, 0, 0, 0);
         parent.addView(handle, handleParams);
         final float[] initialScale = {1f};
@@ -825,6 +829,7 @@ public class OverlayService extends Service {
         overlay.setPivotY(0f);
         overlay.setScaleX(clampedScale);
         overlay.setScaleY(clampedScale);
+        positionResizeHandle();
         syncWindowBounds(clampedScale);
         if (persist) {
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
@@ -835,15 +840,34 @@ public class OverlayService extends Service {
 
     private float clampOverlayScale(float scale) {
         if (Float.isNaN(scale) || Float.isInfinite(scale)) return 1f;
-        return Math.max(MIN_OVERLAY_SCALE, Math.min(MAX_OVERLAY_SCALE, scale));
+        float maxScale = maxOverlayScaleForScreen();
+        float minScale = Math.min(MIN_OVERLAY_SCALE, maxScale);
+        return Math.max(minScale, Math.min(maxScale, scale));
+    }
+
+    private float maxOverlayScaleForScreen() {
+        if (baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return MAX_OVERLAY_SCALE;
+        int safeWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels - dp(16));
+        int safeHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels - dp(16));
+        float widthLimit = safeWidth / (float) baseOverlayWidth;
+        float heightLimit = safeHeight / (float) baseOverlayHeight;
+        return Math.max(.1f, Math.min(MAX_OVERLAY_SCALE, Math.min(widthLimit, heightLimit)));
+    }
+
+    private void positionResizeHandle() {
+        if (resizeHandle == null || overlay == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
+        resizeHandle.setX(Math.max(0, baseOverlayWidth - resizeHandle.getMeasuredWidth()));
+        resizeHandle.setY(Math.max(0, baseOverlayHeight - resizeHandle.getMeasuredHeight()));
     }
 
     private void syncWindowBounds(float scale) {
         if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
         // A janela usa sempre a dimensão máxima. A escala é aplicada ao conjunto
         // visual, nunca à área de recorte da janela; assim nenhum botão desaparece.
-        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * MAX_OVERLAY_SCALE));
-        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * MAX_OVERLAY_SCALE));
+        int safeWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels - dp(16));
+        int safeHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels - dp(16));
+        windowParams.width = Math.min(safeWidth, Math.max(1, Math.round(baseOverlayWidth * MAX_OVERLAY_SCALE)));
+        windowParams.height = Math.min(safeHeight, Math.max(1, Math.round(baseOverlayHeight * MAX_OVERLAY_SCALE)));
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
