@@ -14,8 +14,8 @@ android {
         applicationId = "pt.dashboardauto"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.8.8"
+        versionCode = 17
+        versionName = "0.9.0"
     }
     buildFeatures {
         compose = true
@@ -25,6 +25,26 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+val releaseKeystorePath = providers.environmentVariable("DRIVEDECK_KEYSTORE_PATH").orNull
+val releaseKeyAlias = providers.environmentVariable("DRIVEDECK_KEY_ALIAS").orNull
+val releaseStorePassword = providers.environmentVariable("DRIVEDECK_STORE_PASSWORD").orNull
+val releaseKeyPassword = providers.environmentVariable("DRIVEDECK_KEY_PASSWORD").orNull
+val hasReleaseSigning = listOf(releaseKeystorePath, releaseKeyAlias, releaseStorePassword, releaseKeyPassword).all { !it.isNullOrBlank() }
+
+if (hasReleaseSigning) {
+    android.signingConfigs.create("release") {
+        storeFile = file(releaseKeystorePath!!)
+        keyAlias = releaseKeyAlias
+        storePassword = releaseStorePassword
+        keyPassword = releaseKeyPassword
+    }
+}
+
+android.buildTypes.getByName("release") {
+    isMinifyEnabled = false
+    if (hasReleaseSigning) signingConfig = android.signingConfigs.getByName("release")
 }
 
 kotlin {

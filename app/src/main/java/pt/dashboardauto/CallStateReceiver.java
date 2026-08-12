@@ -15,11 +15,27 @@ public class CallStateReceiver extends BroadcastReceiver {
         if (!PermissionManager.canReadPhoneState(context)) return;
         android.content.SharedPreferences preferences = context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE);
         if (!preferences.getBoolean("return_navigation_during_call", true)) return;
+        // Não interferir no ecrã de chamadas fora do contexto de condução.
+        // A verificação é repetida dentro do atraso para cobrir desligamentos
+        // Bluetooth que aconteçam enquanto o sistema ainda está a abrir a chamada.
+        if (!isDrivingContext(preferences)) return;
         String navigationPackage = preferences.getString("navigation_app", "");
         if (navigationPackage.isEmpty()) return;
         Handler handler = new Handler(Looper.getMainLooper());
-        handler.postDelayed(() -> openNavigation(context, navigationPackage), 1200);
-        handler.postDelayed(() -> openNavigation(context, navigationPackage), 3000);
+        handler.postDelayed(() -> {
+            if (isDrivingContext(context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE))) {
+                openNavigation(context, navigationPackage);
+            }
+        }, 1200);
+        handler.postDelayed(() -> {
+            if (isDrivingContext(context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE))) {
+                openNavigation(context, navigationPackage);
+            }
+        }, 3000);
+    }
+
+    private boolean isDrivingContext(android.content.SharedPreferences preferences) {
+        return OverlayService.isActive() || preferences.getBoolean("selected_bluetooth_connected", false);
     }
 
     private void openNavigation(Context context, String packageName) {

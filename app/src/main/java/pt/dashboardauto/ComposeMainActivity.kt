@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -139,6 +140,15 @@ class ComposeMainActivity : ComponentActivity() {
 
     private fun applyPlayerOrientation(value: String) {
         prefs.edit().putString("overlay_orientation", value).apply()
+        rebuildOverlay()
+    }
+
+    private fun applyAccent(value: String) {
+        prefs.edit().putString("accent_color", value).apply()
+        rebuildOverlay()
+    }
+
+    private fun rebuildOverlay() {
         if (!OverlayService.isActive()) return
         val rebuild = Intent(this, OverlayService::class.java)
             .setAction("pt.dashboardauto.action.REBUILD_LAYOUT")
@@ -156,7 +166,8 @@ class ComposeMainActivity : ComponentActivity() {
         var music by remember { mutableStateOf(prefs.getString("music_app", "") ?: "") }
         var bluetoothAddress by remember { mutableStateOf(prefs.getString("bluetooth_device_address", "") ?: "") }
         var firstRun by remember { mutableStateOf(!prefs.getBoolean("onboarding_complete", false)) }
-        DashboardTheme {
+        var accentKey by remember { mutableStateOf(prefs.getString("accent_color", "blue") ?: "blue") }
+        DashboardTheme(accentColor(accentKey)) {
             var updateDismissed by remember { mutableStateOf(false) }
             if (!updateDismissed) updateInfo?.let { info ->
                 AlertDialog(
@@ -197,7 +208,9 @@ class ComposeMainActivity : ComponentActivity() {
                     onBluetooth = { bluetoothAddress = it; prefs.edit().putString("bluetooth_device_address", it).apply() },
                     onStart = ::startCarMode,
                     updateInfo = updateInfo,
-                    onOpenUpdate = { updateDismissed = false }
+                    onOpenUpdate = { updateDismissed = false },
+                    accentKey = accentKey,
+                    onAccent = { accentKey = it; applyAccent(it) }
                 )
             }
         }
@@ -236,6 +249,7 @@ class ComposeMainActivity : ComponentActivity() {
     ) {
         @Suppress("UNUSED_VARIABLE")
         val permissionStateRevision = permissionRevision
+        var autoBluetooth by remember { mutableStateOf(prefs.getBoolean("auto_bluetooth", false)) }
         Scaffold(containerColor = Color(0xFF0A0A0E)) { padding ->
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Image(
@@ -244,14 +258,24 @@ class ComposeMainActivity : ComponentActivity() {
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().height(150.dp)
                 )
-                Text("CAR MODE", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                Text("CAR MODE", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 Text("Vamos preparar tudo.", color = Color.White, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                 Text("Define as apps e trata das permissões antes de começares a conduzir.", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodyLarge)
-                Text("1. Apps principais", color = Color(0xFFFF375F), style = MaterialTheme.typography.titleMedium)
+                Text("1. Apps principais", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
                 AppPicker("Navegação", apps, navigation, onNavigation, AppCategory.NAVIGATION)
                 AppPicker("Música", apps, music, onMusic, AppCategory.MUSIC)
                 BluetoothPicker(bluetooth, bluetoothAddress, onBluetooth)
-                Text("2. Permissões", color = Color(0xFFFF375F), style = MaterialTheme.typography.titleMedium)
+                SettingsRow(Icons.Rounded.Place, "Iniciar automaticamente ao ligar Bluetooth", autoBluetooth) {
+                    if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) {
+                        PermissionManager.requestBluetooth(this@ComposeMainActivity)
+                    } else if (bluetoothAddress.isBlank() || bluetooth.none { it.address == bluetoothAddress }) {
+                        Toast.makeText(this@ComposeMainActivity, "Escolhe um Bluetooth do carro disponível.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        autoBluetooth = !autoBluetooth
+                        prefs.edit().putBoolean("auto_bluetooth", autoBluetooth).apply()
+                    }
+                }
+                Text("2. Permissões", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
                 PermissionButton("Notificações", PermissionManager.canPostNotifications(this@ComposeMainActivity)) { PermissionManager.requestNotifications(this@ComposeMainActivity) }
                 PermissionButton("Bluetooth", PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) { PermissionManager.requestBluetooth(this@ComposeMainActivity) }
                 PermissionButton("Estado do telefone", PermissionManager.canReadPhoneState(this@ComposeMainActivity)) { PermissionManager.requestPhoneState(this@ComposeMainActivity) }
@@ -264,7 +288,7 @@ class ComposeMainActivity : ComponentActivity() {
                         && apps.any { it.packageName == navigation }
                         && apps.any { it.packageName == music },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF375F))
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
                     Text(if (navigation.isBlank() || music.isBlank()) "Escolhe as duas apps"
                     else if (apps.none { it.packageName == navigation } || apps.none { it.packageName == music }) "Escolhe apps instaladas"
@@ -276,7 +300,7 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     @OptIn(ExperimentalMaterial3Api::class)
-    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, onOpenUpdate: () -> Unit) {
+    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, onOpenUpdate: () -> Unit, accentKey: String, onAccent: (String) -> Unit) {
         var settings by remember { mutableStateOf(false) }
         val navigationAvailable = apps.any { it.packageName == navigation }
         val musicAvailable = apps.any { it.packageName == music }
@@ -290,14 +314,14 @@ class ComposeMainActivity : ComponentActivity() {
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().height(120.dp)
                 )
-                Text("CAR MODE", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                Text("CAR MODE", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 Text("Pronto para conduzir", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) })
                 ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) })
                 if (!navigationAvailable || !musicAvailable) {
                     Text("Uma das apps configuradas já não está instalada. Abre as definições para escolher novamente.", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
                 }
-                Button(onClick = onStart, enabled = navigationAvailable && musicAvailable, modifier = Modifier.fillMaxWidth().height(58.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF375F))) { Icon(Icons.Rounded.Home, null); Spacer(Modifier.size(8.dp)); Text("Iniciar Car Mode") }
+                Button(onClick = onStart, enabled = navigationAvailable && musicAvailable, modifier = Modifier.fillMaxWidth().height(58.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) { Icon(Icons.Rounded.Home, null); Spacer(Modifier.size(8.dp)); Text("Iniciar Car Mode") }
                 AnimatedVisibility(settings, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                     SettingsPanel(
                         apps = apps,
@@ -309,7 +333,9 @@ class ComposeMainActivity : ComponentActivity() {
                         onMusic = onMusic,
                         onBluetooth = onBluetooth,
                         updateInfo = updateInfo,
-                        onOpenUpdate = onOpenUpdate
+                        onOpenUpdate = onOpenUpdate,
+                        accentKey = accentKey,
+                        onAccent = onAccent
                     )
                 }
                 OutlinedButton(onClick = { settings = !settings }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Build, null); Spacer(Modifier.size(8.dp)); Text(if (settings) "Fechar definições" else "Abrir definições") }
@@ -328,7 +354,9 @@ class ComposeMainActivity : ComponentActivity() {
         onMusic: (String) -> Unit,
         onBluetooth: (String) -> Unit,
         updateInfo: UpdateChecker.UpdateInfo?,
-        onOpenUpdate: () -> Unit
+        onOpenUpdate: () -> Unit,
+        accentKey: String,
+        onAccent: (String) -> Unit
     ) {
         var bluetoothMode by remember { mutableStateOf(prefs.getString("bluetooth_launch_mode", "car_mode") ?: "car_mode") }
         var autoplay by remember { mutableStateOf(prefs.getBoolean("auto_play_music_on_car_mode", true)) }
@@ -339,21 +367,34 @@ class ComposeMainActivity : ComponentActivity() {
         var playerOrientation by remember { mutableStateOf(prefs.getString("overlay_orientation", "auto") ?: "auto") }
         var controlSize by remember { mutableStateOf(prefs.getString("overlay_control_size", "normal") ?: "normal") }
         var returnNavigationDuringCall by remember { mutableStateOf(prefs.getBoolean("return_navigation_during_call", true)) }
+        val selectedBluetoothAvailable = bluetoothAddress.isNotBlank() && bluetooth.any { it.address == bluetoothAddress }
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Definições", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                Text("Aparência", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                AccentPicker(accentKey, onAccent)
                 updateInfo?.let { info ->
-                    SettingsRow(Icons.Rounded.Notifications, "Nova versão disponível", false, onClick = onOpenUpdate)
+                    OutlinedButton(onClick = onOpenUpdate, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Rounded.Notifications, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Nova versão disponível", modifier = Modifier.weight(1f))
+                    }
                     Text("DriveDeck ${info.version} pronta para descarregar", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
                 }
                 AppPicker("Navegação", apps, navigation, onNavigation, AppCategory.NAVIGATION)
                 AppPicker("Música", apps, music, onMusic, AppCategory.MUSIC)
                 BluetoothPicker(bluetooth, bluetoothAddress, onBluetooth)
+                if (bluetoothAddress.isNotBlank() && !selectedBluetoothAvailable) {
+                    Text("O dispositivo guardado já não está emparelhado. Escolhe outro para ativar a automação.", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Automação", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 AudioFavoritesPicker(apps)
                 SettingsRow(Icons.Rounded.Notifications, "Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
-                SettingsRow(Icons.Rounded.Place, "Bluetooth automático", autoBluetooth) {
+                SettingsRow(Icons.Rounded.Place, "Bluetooth automático", autoBluetooth && selectedBluetoothAvailable) {
                     if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) {
                         PermissionManager.requestBluetooth(this@ComposeMainActivity)
+                    } else if (bluetoothAddress.isBlank()) {
+                        Toast.makeText(this@ComposeMainActivity, "Escolhe primeiro o Bluetooth do carro.", Toast.LENGTH_SHORT).show()
                     } else {
                         autoBluetooth = !autoBluetooth
                         prefs.edit().putBoolean("auto_bluetooth", autoBluetooth).apply()
@@ -372,17 +413,19 @@ class ComposeMainActivity : ComponentActivity() {
                     expandedByDefault = !expandedByDefault
                     prefs.edit().putBoolean("overlay_expanded", expandedByDefault).apply()
                 }
-                Text("Orientação do player", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                Text("Player", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                Text("Orientação do player", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 PlayerOrientationPicker(playerOrientation) {
                     playerOrientation = it
                     applyPlayerOrientation(it)
                 }
-                Text("Tamanho dos controlos", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                Text("Tamanho dos controlos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 ControlSizePicker(controlSize) {
                     controlSize = it
                     prefs.edit().putString("overlay_control_size", it).apply()
                     applyPlayerOrientation(playerOrientation)
                 }
+                Text("Chamadas e permissões", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 SettingsRow(Icons.Rounded.Place, "Voltar à navegação durante chamadas", returnNavigationDuringCall) {
                     if (!PermissionManager.canReadPhoneState(this@ComposeMainActivity)) {
                         PermissionManager.requestPhoneState(this@ComposeMainActivity)
@@ -391,11 +434,17 @@ class ComposeMainActivity : ComponentActivity() {
                         prefs.edit().putBoolean("return_navigation_during_call", returnNavigationDuringCall).apply()
                     }
                 }
-                Text("Ao ligar Bluetooth", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+                Text("Ao ligar Bluetooth", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 ModePicker(bluetoothMode) { bluetoothMode = it; prefs.edit().putString("bluetooth_launch_mode", it).apply() }
-                OutlinedButton(onClick = { PermissionManager.requestNotifications(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Permitir notificações") }
-                OutlinedButton(onClick = { PermissionManager.requestPhoneState(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Permitir retoma da navegação em chamadas") }
-                OutlinedButton(onClick = { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Permitir overlay sobre outras apps") }
+                OutlinedButton(onClick = { PermissionManager.requestNotifications(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (PermissionManager.canPostNotifications(this@ComposeMainActivity)) "✓ Notificações autorizadas" else "Permitir notificações")
+                }
+                OutlinedButton(onClick = { PermissionManager.requestPhoneState(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (PermissionManager.canReadPhoneState(this@ComposeMainActivity)) "✓ Chamadas autorizadas" else "Permitir retoma da navegação em chamadas")
+                }
+                OutlinedButton(onClick = { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (PermissionManager.canDrawOverlay(this@ComposeMainActivity)) "✓ Overlay autorizado · Gerir" else "Permitir overlay sobre outras apps")
+                }
                 OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
                 OutlinedButton(onClick = {
                     prefs.edit().remove("overlay_x").remove("overlay_y").remove("overlay_scale").apply()
@@ -425,7 +474,7 @@ class ComposeMainActivity : ComponentActivity() {
         }
         if (audioApps.isEmpty()) return
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Apps de áudio favoritas", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+            Text("Apps de áudio favoritas", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             Text("Escolhe várias para trocar rapidamente no player expandido.", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodySmall)
             audioApps.forEach { app ->
                 SettingsRow(Icons.Rounded.PlayArrow, app.label, favorites.contains(app.packageName)) {
@@ -440,9 +489,9 @@ class ComposeMainActivity : ComponentActivity() {
     private fun BluetoothPicker(devices: List<BluetoothItem>, selected: String, onSelected: (String) -> Unit) {
         var expanded by remember { mutableStateOf(false) }
         val selectedLabel = devices.firstOrNull { it.address == selected }?.name
-            ?: if (selected.isBlank()) "Escolher Bluetooth do carro" else "Dispositivo guardado"
+            ?: if (selected.isBlank()) "Escolher Bluetooth do carro" else "Dispositivo não encontrado — escolher novamente"
         Column {
-            Text("Bluetooth do carro", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+            Text("Bluetooth do carro", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             OutlinedButton(onClick = {
                 if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) PermissionManager.requestBluetooth(this@ComposeMainActivity)
                 else expanded = true
@@ -478,7 +527,7 @@ class ComposeMainActivity : ComponentActivity() {
             query.isBlank() || (it.label + " " + it.packageName).contains(query.trim(), ignoreCase = true)
         }
         Column {
-            Text(title + if (suggestions.isEmpty()) " · todas as apps" else if (showAll) " · todas" else " · sugestões", color = Color(0xFFFF375F), style = MaterialTheme.typography.labelMedium)
+            Text(title + if (suggestions.isEmpty()) " · todas as apps" else if (showAll) " · todas" else " · sugestões", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             OutlinedButton(onClick = { expanded = true; query = "" }, modifier = Modifier.fillMaxWidth()) { Text(label, modifier = Modifier.weight(1f)); Icon(Icons.Rounded.KeyboardArrowDown, null) }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 OutlinedTextField(
@@ -540,6 +589,41 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun AccentPicker(value: String, onChange: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        val label = accentLabel(value)
+        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(label, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher cor")
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            listOf("blue", "pink", "green", "purple", "amber").forEach { key ->
+                DropdownMenuItem(
+                    text = { Text(accentLabel(key)) },
+                    leadingIcon = { Icon(Icons.Rounded.Check, contentDescription = null, tint = accentColor(key)) },
+                    onClick = { onChange(key); menuExpanded = false }
+                )
+            }
+        }
+    }
+
+    private fun accentLabel(key: String): String = when (key) {
+        "pink" -> "Rosa — DriveDeck"
+        "green" -> "Verde — calmo"
+        "purple" -> "Roxo — noturno"
+        "amber" -> "Âmbar — alto contraste"
+        else -> "Azul — navegação"
+    }
+
+    private fun accentColor(key: String): Color = when (key) {
+        "pink" -> Color(0xFFFF375F)
+        "green" -> Color(0xFF30D158)
+        "purple" -> Color(0xFFBF5AF2)
+        "amber" -> Color(0xFFFFB340)
+        else -> Color(0xFF0A84FF)
+    }
+
+    @Composable
     private fun ControlSizePicker(value: String, onChange: (String) -> Unit) {
         var menuExpanded by remember { mutableStateOf(false) }
         val label = when (value) {
@@ -562,7 +646,7 @@ class ComposeMainActivity : ComponentActivity() {
     private fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
         Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, null, tint = Color(0xFFFF375F), modifier = Modifier.size(32.dp))
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
                 Column(Modifier.padding(start = 16.dp)) { Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium); Text(subtitle, color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodyMedium) }
             }
         }
@@ -570,15 +654,15 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     private fun SettingsRow(icon: ImageVector, title: String, checked: Boolean, onClick: () -> Unit) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = Color(0xFFFF375F), modifier = Modifier.size(24.dp))
+        Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             Text(title, color = Color.White, modifier = Modifier.weight(1f).padding(horizontal = 12.dp))
-            Switch(checked = checked, onCheckedChange = { onClick() })
+            Switch(checked = checked, onCheckedChange = null)
         }
     }
 
     @Composable
-    private fun FeatureRow(icon: ImageVector, title: String, subtitle: String) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = Color(0xFFFF375F), modifier = Modifier.size(28.dp)); Column(Modifier.padding(start = 14.dp)) { Text(title, color = Color.White, fontWeight = FontWeight.SemiBold); Text(subtitle, color = Color(0xFFAAAAB4)) } } }
+    private fun FeatureRow(icon: ImageVector, title: String, subtitle: String) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp)); Column(Modifier.padding(start = 14.dp)) { Text(title, color = Color.White, fontWeight = FontWeight.SemiBold); Text(subtitle, color = Color(0xFFAAAAB4)) } } }
 
     private enum class AppCategory { NAVIGATION, MUSIC }
 
@@ -594,7 +678,7 @@ class ComposeMainActivity : ComponentActivity() {
     private data class BluetoothItem(val name: String, val address: String)
 
     @Composable
-    private fun DashboardTheme(content: @Composable () -> Unit) {
-        MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFFF375F), background = Color(0xFF0A0A0E), surface = Color(0xFF1B1B22)), content = content)
+    private fun DashboardTheme(accent: Color, content: @Composable () -> Unit) {
+        MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = Color(0xFF0A0A0E), surface = Color(0xFF1B1B22)), content = content)
     }
 }

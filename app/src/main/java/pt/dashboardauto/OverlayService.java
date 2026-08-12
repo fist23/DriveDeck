@@ -17,6 +17,8 @@ import android.content.res.ColorStateList;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
+import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
 import android.widget.ImageView;
@@ -64,6 +66,15 @@ public class OverlayService extends Service {
     private float downX, downY;
     private int startX, startY;
     private boolean dragMoved;
+    private boolean dragActive;
+    private boolean dropZoneActive;
+    private VelocityTracker dragVelocity;
+    private int dragTouchSlop;
+    private int pendingDragX;
+    private int pendingDragY;
+    private boolean dragFramePosted;
+    private float pendingResizeScale = 1f;
+    private boolean resizeFramePosted;
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable refreshTrack = new Runnable() {
         @Override public void run() {
@@ -112,7 +123,9 @@ public class OverlayService extends Service {
         String orientation = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("overlay_orientation", "auto");
         landscape = "horizontal".equals(orientation) || ("auto".equals(orientation) && physicalLandscape);
         overlay = new FrameLayout(this);
+        overlay.setClipChildren(false);
         LinearLayout content = new LinearLayout(this);
+        content.setClipChildren(false);
         content.setOrientation(landscape && !expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER);
         content.setPadding(dp(8), dp(4), dp(8), dp(4));
@@ -240,7 +253,7 @@ public class OverlayService extends Service {
         GradientDrawable background = new GradientDrawable();
         background.setColor(Color.rgb(18, 18, 23));
         background.setCornerRadius(dp(18));
-        background.setStroke(dp(1), Color.rgb(58, 58, 70));
+        background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
     }
 
@@ -328,7 +341,7 @@ public class OverlayService extends Service {
     private ImageButton actionButton(int icon, String description, boolean accent) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(icon);
-        button.setColorFilter(accent ? Color.rgb(255, 55, 95) : Color.WHITE);
+        button.setColorFilter(accent ? accentColor() : Color.WHITE);
         button.setContentDescription(description);
         button.setTooltipText(description);
         button.setPadding(controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10));
@@ -388,14 +401,26 @@ public class OverlayService extends Service {
     private boolean dragOverlay(android.view.View view, MotionEvent event) {
         if (windowParams == null || manager == null) return false;
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            dragActive = true;
+            dragTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+            if (dragVelocity != null) dragVelocity.recycle();
+            dragVelocity = VelocityTracker.obtain();
+            dragVelocity.addMovement(event);
             downX = event.getRawX(); downY = event.getRawY();
             startX = windowParams.x; startY = windowParams.y;
             dragMoved = false;
+            if (overlay != null) {
+                overlay.animate().cancel();
+                overlay.setTranslationX(0f);
+                overlay.setTranslationY(0f);
+                overlay.setAlpha(1f);
+            }
             showDropZone(false);
             return true;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-            if (Math.abs(event.getRawX() - downX) > dp(8) || Math.abs(event.getRawY() - downY) > dp(8)) dragMoved = true;
+            if (dragVelocity != null) dragVelocity.addMovement(event);
+            if (Math.abs(event.getRawX() - downX) > dragTouchSlop || Math.abs(event.getRawY() - downY) > dragTouchSlop) dragMoved = true;
             if (dragMoved) {
                 boolean movingToTop = event.getRawY() < downY - dp(12);
                 setDropZoneMode(movingToTop);
@@ -404,27 +429,62 @@ public class OverlayService extends Service {
             int screenHeight = getResources().getDisplayMetrics().heightPixels;
             int draggedX = Math.max(0, startX + (int) (event.getRawX() - downX));
             int draggedY = Math.max(0, startY + (int) (event.getRawY() - downY));
-            int playerWidth = overlay == null ? 0 : overlay.getWidth();
-            int playerHeight = overlay == null ? 0 : overlay.getHeight();
+            int playerWidth = visualOverlayWidth();
+            int playerHeight = visualOverlayHeight();
             int targetX = Math.max(0, (screenWidth - playerWidth) / 2);
             int targetY = Math.max(0, screenHeight - playerHeight - dp(18));
-            float normalizedDistance = Math.max(0f, Math.min(1f, (event.getRawY() - (screenHeight - dp(320))) / (float) dp(320)));
+            boolean approachingBottom = event.getRawY() >= downY;
+            float normalizedDistance = approachingBottom
+                    ? Math.max(0f, Math.min(1f, (event.getRawY() - (screenHeight - dp(320))) / (float) dp(320)))
+                    : 0f;
             float magnetProgress = normalizedDistance * normalizedDistance * (3f - 2f * normalizedDistance);
-            windowParams.x = Math.max(0, (int) (draggedX + (targetX - draggedX) * magnetProgress * .9f));
-            windowParams.y = Math.max(0, (int) (draggedY + (targetY - draggedY) * magnetProgress * .9f));
-            boolean overDropZone = magnetProgress > .45f;
+            int nextX = Math.max(0, (int) (draggedX + (targetX - draggedX) * magnetProgress * .9f));
+            int nextY = Math.max(0, (int) (draggedY + (targetY - draggedY) * magnetProgress * .9f));
+            nextX = Math.min(nextX, Math.max(0, screenWidth - playerWidth));
+            nextY = Math.min(nextY, Math.max(0, screenHeight - playerHeight));
+            boolean overDropZone = magnetProgress > (dropZoneActive ? .25f : .45f);
+            dropZoneActive = overDropZone;
             if (dropZone != null) dropZone.setBackground(dropZoneBackground(overDropZone));
-            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+            scheduleDragPosition(nextX, nextY);
             return true;
         }
-        if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+        if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            if (dragVelocity != null) dragVelocity.addMovement(event);
+            float velocityY = 0f;
+            float velocityX = 0f;
+            if (dragVelocity != null) {
+                dragVelocity.computeCurrentVelocity(1000);
+                velocityY = dragVelocity.getYVelocity();
+                velocityX = dragVelocity.getXVelocity();
+                dragVelocity.recycle();
+                dragVelocity = null;
+            }
+            dragActive = false;
+            dragFramePosted = false;
+            if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                dropZoneActive = false;
+                hideDropZone();
+                return true;
+            }
+            if (dragMoved) {
+                // O último MOVE pode ainda estar agendado para o frame seguinte.
+                // Usa-o já no UP para o snap não ficar um frame atrás do dedo.
+                windowParams.x = pendingDragX;
+                windowParams.y = pendingDragY;
+            }
             float deltaY = event.getRawY() - downY;
             float deltaX = event.getRawX() - downX;
             int screenHeight = getResources().getDisplayMetrics().heightPixels;
             boolean overTopZone = event.getRawY() <= dp(112);
             boolean overDropZone = event.getRawY() > screenHeight - dp(180);
+            dropZoneActive = false;
             hideDropZone();
-            if (dragMoved && !expanded && overTopZone && deltaY < -dp(64) && Math.abs(deltaY) > Math.abs(deltaX) * 1.2f) {
+            boolean verticalSwipe = Math.abs(deltaY) > Math.abs(deltaX) * 1.2f
+                    || Math.abs(velocityY) > Math.abs(velocityX) * 1.2f;
+            boolean fastUpwardSwipe = velocityY < -dp(900f);
+            boolean fastDownwardSwipe = velocityY > dp(900f);
+            if (dragMoved && !expanded && overTopZone
+                    && (deltaY < -dp(64) || fastUpwardSwipe) && verticalSwipe) {
                 toggleExpanded();
                 return true;
             }
@@ -432,19 +492,47 @@ public class OverlayService extends Service {
                 view.performClick();
                 return true;
             }
-            if (deltaY > dp(84) && overDropZone && Math.abs(deltaY) > Math.abs(deltaX) * 1.2f) {
+            if ((deltaY > dp(84) || fastDownwardSwipe) && overDropZone && verticalSwipe) {
                 hideMiniPlayer();
                 return true;
             }
             int screenWidth = getResources().getDisplayMetrics().widthPixels;
-            int playerWidth = overlay == null ? 0 : overlay.getWidth();
+            int playerWidth = visualOverlayWidth();
             int rightEdge = Math.max(0, screenWidth - playerWidth);
             if (windowParams.x <= dp(28)) windowParams.x = 0;
             else if (windowParams.x >= rightEdge - dp(28)) windowParams.x = rightEdge;
+            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putInt("overlay_x", windowParams.x).putInt("overlay_y", windowParams.y).apply();
             return true;
         }
         return true;
+    }
+
+    private void scheduleDragPosition(int x, int y) {
+        if (overlay == null || windowParams == null || manager == null) return;
+        pendingDragX = x;
+        pendingDragY = y;
+        if (dragFramePosted) return;
+        dragFramePosted = true;
+        overlay.postOnAnimation(() -> {
+            dragFramePosted = false;
+            if (!dragActive || overlay == null || windowParams == null || manager == null) return;
+            windowParams.x = pendingDragX;
+            windowParams.y = pendingDragY;
+            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+        });
+    }
+
+    private int visualOverlayWidth() {
+        if (overlay == null) return 0;
+        int measured = baseOverlayWidth > 0 ? baseOverlayWidth : overlay.getWidth();
+        return Math.max(1, Math.round(measured * overlay.getScaleX()));
+    }
+
+    private int visualOverlayHeight() {
+        if (overlay == null) return 0;
+        int measured = baseOverlayHeight > 0 ? baseOverlayHeight : overlay.getHeight();
+        return Math.max(1, Math.round(measured * overlay.getScaleY()));
     }
 
     private int defaultOverlayY() {
@@ -476,11 +564,10 @@ public class OverlayService extends Service {
                 .remove("overlay_scale")
                 .apply();
         if (overlay == null || windowParams == null || manager == null) return;
-        overlay.setScaleX(1f);
-        overlay.setScaleY(1f);
+        applyOverlayScale(1f, false);
         windowParams.x = dp(16);
         windowParams.y = defaultOverlayY();
-        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+        clampOverlayPosition();
     }
 
     private int controlDp(int value) {
@@ -637,13 +724,24 @@ public class OverlayService extends Service {
 
     private GradientDrawable dropZoneBackground(boolean active) {
         GradientDrawable background = new GradientDrawable();
-        background.setColor(active ? Color.rgb(210, 42, 78) : Color.rgb(44, 44, 55));
+        int accent = accentColor();
+        background.setColor(active ? Color.argb(220, Color.red(accent), Color.green(accent), Color.blue(accent)) : Color.rgb(44, 44, 55));
         background.setCornerRadius(dp(20));
-        background.setStroke(dp(1), active ? Color.rgb(255, 130, 150) : Color.rgb(100, 100, 115));
+        background.setStroke(dp(1), active ? Color.rgb(Math.min(255, Color.red(accent) + 55), Math.min(255, Color.green(accent) + 55), Math.min(255, Color.blue(accent) + 55)) : Color.rgb(100, 100, 115));
         return background;
     }
 
+    private int accentColor() {
+        String key = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("accent_color", "blue");
+        if ("pink".equals(key)) return Color.rgb(255, 55, 95);
+        if ("green".equals(key)) return Color.rgb(48, 209, 88);
+        if ("purple".equals(key)) return Color.rgb(191, 90, 242);
+        if ("amber".equals(key)) return Color.rgb(255, 179, 64);
+        return Color.rgb(10, 132, 255);
+    }
+
     private void hideDropZone() {
+        dropZoneActive = false;
         if (dropZone == null) return;
         TextView current = dropZone;
         dropZone = null;
@@ -666,12 +764,16 @@ public class OverlayService extends Service {
         handle.setContentDescription("Redimensionar player");
         handle.setTooltipText("Arrastar para redimensionar");
         // Ícone discreto com área de toque confortável para utilização em condução.
-        handle.setPadding(dp(12), dp(12), dp(12), dp(12));
+        handle.setPadding(dp(13), dp(13), dp(13), dp(13));
         handle.setMinimumWidth(dp(44));
         handle.setMinimumHeight(dp(44));
+        handle.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        handle.setAlpha(.82f);
         handle.setBackgroundColor(Color.TRANSPARENT);
+        // Área visual pequena no canto; os 44dp continuam a ser apenas a área
+        // de toque para não obrigar a acertar num ícone minúsculo.
         FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.END | Gravity.BOTTOM);
-        handleParams.setMargins(0, 0, dp(1), dp(1));
+        handleParams.setMargins(0, 0, 0, 0);
         parent.addView(handle, handleParams);
         final float[] initialScale = {1f};
         final float[] initialX = {0f};
@@ -679,6 +781,7 @@ public class OverlayService extends Service {
         handle.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 initialScale[0] = overlay.getScaleX();
+                pendingResizeScale = initialScale[0];
                 initialX[0] = event.getRawX();
                 initialY[0] = event.getRawY();
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
@@ -691,15 +794,27 @@ public class OverlayService extends Service {
                 float diagonalDelta = (horizontalDelta + verticalDelta) * .5f;
                 float delta = diagonalDelta / dp(300f);
                 float scale = clampOverlayScale(initialScale[0] + delta);
-                applyOverlayScale(scale, false);
+                scheduleOverlayScale(scale);
                 return true;
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                applyOverlayScale(overlay.getScaleX(), true);
+                resizeFramePosted = false;
+                applyOverlayScale(pendingResizeScale, true);
                 if (event.getActionMasked() == MotionEvent.ACTION_UP) view.performClick();
                 return true;
             }
             return true;
+        });
+    }
+
+    private void scheduleOverlayScale(float scale) {
+        if (overlay == null) return;
+        pendingResizeScale = clampOverlayScale(scale);
+        if (resizeFramePosted) return;
+        resizeFramePosted = true;
+        overlay.postOnAnimation(() -> {
+            resizeFramePosted = false;
+            if (overlay != null) applyOverlayScale(pendingResizeScale, false);
         });
     }
 
@@ -725,8 +840,10 @@ public class OverlayService extends Service {
 
     private void syncWindowBounds(float scale) {
         if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
-        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
+        // A janela usa sempre a dimensão máxima. A escala é aplicada ao conjunto
+        // visual, nunca à área de recorte da janela; assim nenhum botão desaparece.
+        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * MAX_OVERLAY_SCALE));
+        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * MAX_OVERLAY_SCALE));
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 

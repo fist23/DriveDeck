@@ -50,12 +50,25 @@ public final class PermissionManager {
     }
 
     public static void openOverlaySettings(Context context) {
-        context.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:" + context.getPackageName())));
+        openSettings(context, new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:" + context.getPackageName())));
     }
 
-    public static void openMediaSettings(Context context) { context.startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")); }
+    public static void openMediaSettings(Context context) {
+        openSettings(context, new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+    }
 
     public static void openAssistantSettings(Context context) {
-        context.startActivity(new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS));
+        openSettings(context, new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS));
+    }
+
+    private static void openSettings(Context context, Intent intent) {
+        try {
+            context.startActivity(intent);
+        } catch (RuntimeException unavailable) {
+            try {
+                context.startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (RuntimeException ignored) { }
+        }
     }
 }
