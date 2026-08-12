@@ -9,7 +9,7 @@ on:
       release_tag:
         description: "Tag da release a publicar"
         required: true
-        default: "v0.9.0"
+        default: "v0.9.1"
 
 permissions:
   contents: write
@@ -51,7 +51,7 @@ jobs:
       - name: Restore stable release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.DRIVEDECK_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/drivedeck-release.jks"
+        run: echo "$KEYSTORE_BASE64" | tr -cd 'A-Za-z0-9+/=' | base64 --decode > "$RUNNER_TEMP/drivedeck-release.jks"
 
       - name: Build signed APK
         env:
