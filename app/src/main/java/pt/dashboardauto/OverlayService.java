@@ -930,7 +930,7 @@ public class OverlayService extends Service {
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         try { startActivity(launch); } catch (RuntimeException ignored) { return; }
         if (getSharedPreferences("dashboard_auto", MODE_PRIVATE).getBoolean("auto_play_music_on_car_mode", true)) {
-            refreshHandler.postDelayed(() -> MusicController.play(this), 750L);
+            refreshHandler.postDelayed(() -> MusicController.playWhenReady(this), 650L);
         }
     }
 

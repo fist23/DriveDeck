@@ -7,6 +7,8 @@ import android.media.session.MediaSessionManager;
 import android.os.Build;
 import android.text.TextUtils;
 import android.graphics.Bitmap;
+import android.os.Handler;
+import android.os.Looper;
 import java.util.List;
 
 public final class MusicController {
@@ -19,6 +21,26 @@ public final class MusicController {
 
     public static void play(Context context) {
         withSelected(context, controller -> controller.getTransportControls().play());
+    }
+
+    /**
+     * Aguarda a MediaSession da app de áudio escolhida. Apps como o YouTube
+     * Music precisam de algum tempo para arrancar e publicar a sessão depois
+     * de serem abertos pelo Bluetooth.
+     */
+    public static void playWhenReady(Context context) {
+        playWhenReady(context, 0);
+    }
+
+    private static void playWhenReady(Context context, int attempt) {
+        MediaController selected = selectedController(context, true);
+        if (selected != null) {
+            selected.getTransportControls().play();
+            return;
+        }
+        if (attempt >= 5) return;
+        long delay = attempt == 0 ? 700L : 900L;
+        new Handler(Looper.getMainLooper()).postDelayed(() -> playWhenReady(context, attempt + 1), delay);
     }
 
     public static void pause(Context context) {
@@ -93,8 +115,8 @@ public final class MusicController {
 
     private interface ControllerAction { void apply(MediaController controller); }
 
-    private static void withSelected(Context context, ControllerAction action) {
-        if (Build.VERSION.SDK_INT < 21) return;
+    private static MediaController selectedController(Context context, boolean requirePreferred) {
+        if (Build.VERSION.SDK_INT < 21) return null;
         try {
             MediaSessionManager manager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
             ComponentName listener = new ComponentName(context, MusicNotificationListener.class);
@@ -102,12 +124,17 @@ public final class MusicController {
             String preferred = context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE).getString("music_app", "");
             MediaController fallback = null;
             for (MediaController controller : sessions) {
+                if (preferred.equals(controller.getPackageName())) return controller;
                 if (fallback == null) fallback = controller;
-                if (!preferred.isEmpty() && preferred.equals(controller.getPackageName())) { action.apply(controller); return; }
             }
-            if (fallback != null) action.apply(fallback);
+            return requirePreferred && !preferred.isEmpty() ? null : fallback;
         } catch (SecurityException ignored) {
-            // The user has not enabled the notification-listener access yet.
+            return null;
         }
+    }
+
+    private static void withSelected(Context context, ControllerAction action) {
+        MediaController controller = selectedController(context, false);
+        if (controller != null) action.apply(controller);
     }
 }
