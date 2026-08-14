@@ -21,6 +21,8 @@ import android.view.VelocityTracker;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -43,6 +45,7 @@ public class OverlayService extends Service {
     private TextView album;
     private TextView timeLabel;
     private ImageView artwork;
+    private android.view.View musicInfoContainer;
     private Bitmap renderedArtwork;
     private ImageButton playButton;
     private ImageButton resizeHandle;
@@ -62,6 +65,7 @@ public class OverlayService extends Service {
     private boolean expanded;
     private boolean miniPlayerHidden;
     private WindowManager.LayoutParams windowParams;
+    private android.view.View playerContent;
     private int baseOverlayWidth;
     private int baseOverlayHeight;
     private float downX, downY;
@@ -74,8 +78,11 @@ public class OverlayService extends Service {
     private int pendingDragX;
     private int pendingDragY;
     private boolean dragFramePosted;
+    private int dragGestureId;
     private float pendingResizeScale = 1f;
     private boolean resizeFramePosted;
+    private int resizeGestureId;
+    private boolean layoutTransitionRunning;
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable refreshTrack = new Runnable() {
         @Override public void run() {
@@ -120,6 +127,8 @@ public class OverlayService extends Service {
 
     private void addOverlay() {
         manager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        baseOverlayWidth = 0;
+        baseOverlayHeight = 0;
         physicalLandscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
         String orientation = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("overlay_orientation", "auto");
         landscape = "horizontal".equals(orientation) || ("auto".equals(orientation) && physicalLandscape);
@@ -132,6 +141,7 @@ public class OverlayService extends Service {
         content.setPadding(dp(8), dp(4), dp(8), dp(4));
         content.setBackground(panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
+        musicInfoContainer = mediaContainer;
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
@@ -223,10 +233,11 @@ public class OverlayService extends Service {
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
         overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
         // O redimensionador pertence ao player completo, separado do botão de expandir.
+        playerContent = content;
         addResizeHandle(overlay);
         float savedScale = clampOverlayScale(getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f));
-        overlay.setScaleX(savedScale);
-        overlay.setScaleY(savedScale);
+        content.setScaleX(savedScale);
+        content.setScaleY(savedScale);
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getInt("overlay_x", dp(16));
@@ -237,14 +248,22 @@ public class OverlayService extends Service {
             overlay.post(() -> {
                 baseOverlayWidth = overlay.getMeasuredWidth();
                 baseOverlayHeight = overlay.getMeasuredHeight();
-                positionResizeHandle();
+                // Mantém o layout lógico estável. Se o WindowManager medir
+                // novamente este LinearLayout com os bounds já reduzidos,
+                // alguns controlos podem ser comprimidos ou cortados.
+                FrameLayout.LayoutParams contentParams = (FrameLayout.LayoutParams) content.getLayoutParams();
+                contentParams.width = baseOverlayWidth;
+                contentParams.height = baseOverlayHeight;
+                content.setLayoutParams(contentParams);
+                positionResizeHandle(savedScale);
                 syncWindowBounds(savedScale);
                 clampOverlayPosition();
             });
             overlay.setAlpha(0f);
-            overlay.setScaleX(savedScale * .92f);
-            overlay.setScaleY(savedScale * .92f);
-            overlay.animate().alpha(1f).scaleX(savedScale).scaleY(savedScale).setDuration(220).start();
+            content.setScaleX(savedScale * .92f);
+            content.setScaleY(savedScale * .92f);
+            content.animate().scaleX(savedScale).scaleY(savedScale).setDuration(220).start();
+            overlay.animate().alpha(1f).setDuration(220).start();
             refreshHandler.post(refreshTrack);
         } catch (WindowManager.BadTokenException | SecurityException error) {
             overlay = null;
@@ -289,6 +308,7 @@ public class OverlayService extends Service {
     }
 
     private void renderTrack(String value) {
+        if (track == null) return;
         String[] parts = value.split("\\n", 2);
         track.setText(parts.length > 0 && !parts[0].isBlank() ? parts[0] : "Sem música ativa");
         if (artist != null) artist.setText(parts.length > 1 ? parts[1] : "");
@@ -306,29 +326,38 @@ public class OverlayService extends Service {
     }
 
     private void animateTrackChange(String value) {
-        if (overlay == null) {
-            renderTrack(value);
-            return;
-        }
+        if (overlay == null || track == null || musicInfoContainer == null) return;
         if (trackTransitionRunning) {
             pendingTrackValue = value;
             return;
         }
         trackTransitionRunning = true;
         pendingTrackValue = null;
-        float distance = Math.max(dp(96), overlay.getWidth() * .72f);
-        overlay.animate()
+        FrameLayout transitionOverlay = overlay;
+        android.view.View transitionContainer = musicInfoContainer;
+        float distance = Math.max(dp(72), transitionContainer.getWidth() * .42f);
+        transitionContainer.animate()
                 .translationX(-distance)
                 .alpha(.12f)
-                .setDuration(145)
+                .setDuration(160)
+                .setInterpolator(new DecelerateInterpolator(1.6f))
                 .withEndAction(() -> {
+                    if (overlay != transitionOverlay || musicInfoContainer != transitionContainer || track == null) {
+                        trackTransitionRunning = false;
+                        return;
+                    }
                     renderTrack(value);
-                    overlay.setTranslationX(distance);
-                    overlay.animate()
+                    transitionContainer.setTranslationX(distance);
+                    transitionContainer.animate()
                             .translationX(0f)
                             .alpha(1f)
-                            .setDuration(225)
+                            .setDuration(460)
+                            .setInterpolator(new OvershootInterpolator(1.35f))
                             .withEndAction(() -> {
+                                if (overlay != transitionOverlay || musicInfoContainer != transitionContainer) {
+                                    trackTransitionRunning = false;
+                                    return;
+                                }
                                 trackTransitionRunning = false;
                                 if (pendingTrackValue != null && !pendingTrackValue.equals(value)) {
                                     String next = pendingTrackValue;
@@ -370,15 +399,21 @@ public class OverlayService extends Service {
     private void setPlayButtonState(boolean playing, boolean animate) {
         if (playButton == null) return;
         int icon = playing ? R.drawable.ic_pause : R.drawable.ic_play;
+        playButton.animate().cancel();
+        playButton.setScaleX(1f);
+        playButton.setScaleY(1f);
         if (!animate) {
+            playButton.setRotation(0f);
+            playButton.setAlpha(1f);
             playButton.setImageResource(icon);
             return;
         }
-        playButton.animate().rotationBy(180f).alpha(.35f).setDuration(90).withEndAction(() -> {
-            if (playButton == null) return;
-            playButton.setImageResource(icon);
-            playButton.animate().rotation(0f).alpha(1f).setDuration(150).start();
-        }).start();
+        // Atualiza o estado antes da animação para que toques rápidos nunca
+        // deixem uma animação anterior restaurar o ícone errado.
+        playButton.setImageResource(icon);
+        playButton.setRotation(0f);
+        playButton.setAlpha(.55f);
+        playButton.animate().alpha(1f).setDuration(140).start();
     }
 
     private void addExpandedActions(LinearLayout parent) {
@@ -403,7 +438,9 @@ public class OverlayService extends Service {
 
     private boolean dragOverlay(android.view.View view, MotionEvent event) {
         if (windowParams == null || manager == null) return false;
+        if (layoutTransitionRunning) return true;
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            dragGestureId++;
             dragActive = true;
             dragTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
             if (dragVelocity != null) dragVelocity.recycle();
@@ -411,6 +448,8 @@ public class OverlayService extends Service {
             dragVelocity.addMovement(event);
             downX = event.getRawX(); downY = event.getRawY();
             startX = windowParams.x; startY = windowParams.y;
+            pendingDragX = startX;
+            pendingDragY = startY;
             dragMoved = false;
             if (overlay != null) {
                 overlay.animate().cancel();
@@ -467,6 +506,7 @@ public class OverlayService extends Service {
             dragActive = false;
             dragFramePosted = false;
             if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                dragGestureId++;
                 dropZoneActive = false;
                 hideDropZone();
                 return true;
@@ -490,6 +530,7 @@ public class OverlayService extends Service {
             boolean fastDownwardSwipe = velocityY > dp(900f);
             if (dragMoved && !expanded && overTopZone
                     && (deltaY < -dp(64) || fastUpwardSwipe) && verticalSwipe) {
+                persistOverlayPosition();
                 toggleExpanded();
                 return true;
             }
@@ -505,7 +546,7 @@ public class OverlayService extends Service {
             // preservar a posição escolhida, sem colar o player à esquerda
             // ou à direita.
             try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
-            getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putInt("overlay_x", windowParams.x).putInt("overlay_y", windowParams.y).apply();
+            persistOverlayPosition();
             return true;
         }
         return true;
@@ -517,9 +558,11 @@ public class OverlayService extends Service {
         pendingDragY = y;
         if (dragFramePosted) return;
         dragFramePosted = true;
+        FrameLayout scheduledOverlay = overlay;
+        int scheduledGestureId = dragGestureId;
         overlay.postOnAnimation(() -> {
             dragFramePosted = false;
-            if (!dragActive || overlay == null || windowParams == null || manager == null) return;
+            if (!dragActive || dragGestureId != scheduledGestureId || overlay != scheduledOverlay || windowParams == null || manager == null) return;
             windowParams.x = pendingDragX;
             windowParams.y = pendingDragY;
             try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
@@ -529,13 +572,15 @@ public class OverlayService extends Service {
     private int visualOverlayWidth() {
         if (overlay == null) return 0;
         int measured = baseOverlayWidth > 0 ? baseOverlayWidth : overlay.getWidth();
-        return Math.max(1, Math.round(measured * overlay.getScaleX()));
+        float scale = playerContent == null ? 1f : playerContent.getScaleX();
+        return Math.max(1, Math.round(measured * scale));
     }
 
     private int visualOverlayHeight() {
         if (overlay == null) return 0;
         int measured = baseOverlayHeight > 0 ? baseOverlayHeight : overlay.getHeight();
-        return Math.max(1, Math.round(measured * overlay.getScaleY()));
+        float scale = playerContent == null ? 1f : playerContent.getScaleY();
+        return Math.max(1, Math.round(measured * scale));
     }
 
     private int defaultOverlayY() {
@@ -554,9 +599,14 @@ public class OverlayService extends Service {
         windowParams.x = clampedX;
         windowParams.y = clampedY;
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+        persistOverlayPosition();
+    }
+
+    private void persistOverlayPosition() {
+        if (windowParams == null) return;
         getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
-                .putInt("overlay_x", clampedX)
-                .putInt("overlay_y", clampedY)
+                .putInt("overlay_x", windowParams.x)
+                .putInt("overlay_y", windowParams.y)
                 .apply();
     }
 
@@ -584,6 +634,17 @@ public class OverlayService extends Service {
 
     private void removeOverlay() {
         refreshHandler.removeCallbacks(refreshTrack);
+        layoutTransitionRunning = false;
+        dragActive = false;
+        dragMoved = false;
+        dragGestureId++;
+        dragFramePosted = false;
+        resizeFramePosted = false;
+        resizeGestureId++;
+        if (dragVelocity != null) {
+            dragVelocity.recycle();
+            dragVelocity = null;
+        }
         if (overlay != null) {
             overlay.animate().cancel();
             overlay.setTranslationX(0f);
@@ -601,12 +662,14 @@ public class OverlayService extends Service {
         progressBar = null;
         durationMs = 0L;
         artwork = null;
+        musicInfoContainer = null;
         renderedArtwork = null;
         playButton = null;
         windowParams = null;
         lastTrackValue = null;
         pendingTrackValue = null;
         trackTransitionRunning = false;
+        playerContent = null;
     }
 
     private void handleAction(int index) {
@@ -631,12 +694,14 @@ public class OverlayService extends Service {
 
     private void toggleExpanded() {
         boolean nextState = !expanded;
-        if (overlay == null) return;
-        overlay.animate().alpha(0f).scaleX(.92f).scaleY(.92f).setDuration(160).withEndAction(() -> {
+        if (overlay == null || layoutTransitionRunning) return;
+        layoutTransitionRunning = true;
+        overlay.animate().alpha(0f).setDuration(160).withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();
             removeOverlay();
             addOverlay();
+            layoutTransitionRunning = false;
         }).start();
     }
 
@@ -784,7 +849,8 @@ public class OverlayService extends Service {
         final float[] initialY = {0f};
         handle.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                initialScale[0] = overlay.getScaleX();
+                resizeGestureId++;
+                initialScale[0] = playerContent == null ? 1f : playerContent.getScaleX();
                 pendingResizeScale = initialScale[0];
                 initialX[0] = event.getRawX();
                 initialY[0] = event.getRawY();
@@ -803,8 +869,14 @@ public class OverlayService extends Service {
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                 resizeFramePosted = false;
-                applyOverlayScale(pendingResizeScale, true);
-                if (event.getActionMasked() == MotionEvent.ACTION_UP) view.performClick();
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    applyOverlayScale(pendingResizeScale, true);
+                    view.performClick();
+                } else {
+                    resizeGestureId++;
+                    pendingResizeScale = initialScale[0];
+                    applyOverlayScale(initialScale[0], false);
+                }
                 return true;
             }
             return true;
@@ -816,20 +888,24 @@ public class OverlayService extends Service {
         pendingResizeScale = clampOverlayScale(scale);
         if (resizeFramePosted) return;
         resizeFramePosted = true;
+        FrameLayout scheduledOverlay = overlay;
+        int scheduledGestureId = resizeGestureId;
         overlay.postOnAnimation(() -> {
             resizeFramePosted = false;
-            if (overlay != null) applyOverlayScale(pendingResizeScale, false);
+            if (overlay == scheduledOverlay && resizeGestureId == scheduledGestureId) applyOverlayScale(pendingResizeScale, false);
         });
     }
 
     private void applyOverlayScale(float scale, boolean persist) {
         if (overlay == null) return;
         float clampedScale = clampOverlayScale(scale);
-        overlay.setPivotX(0f);
-        overlay.setPivotY(0f);
-        overlay.setScaleX(clampedScale);
-        overlay.setScaleY(clampedScale);
-        positionResizeHandle();
+        if (playerContent != null) {
+            playerContent.setPivotX(0f);
+            playerContent.setPivotY(0f);
+            playerContent.setScaleX(clampedScale);
+            playerContent.setScaleY(clampedScale);
+        }
+        positionResizeHandle(clampedScale);
         syncWindowBounds(clampedScale);
         // Ao aumentar o player, conserva a posição escolhida mas garante que
         // a nova caixa visual continua totalmente dentro do ecrã.
@@ -857,21 +933,21 @@ public class OverlayService extends Service {
         return Math.max(.1f, Math.min(MAX_OVERLAY_SCALE, Math.min(widthLimit, heightLimit)));
     }
 
-    private void positionResizeHandle() {
+    private void positionResizeHandle(float scale) {
         if (resizeHandle == null || overlay == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        resizeHandle.setX(Math.max(0, baseOverlayWidth - resizeHandle.getMeasuredWidth()));
-        resizeHandle.setY(Math.max(0, baseOverlayHeight - resizeHandle.getMeasuredHeight()));
+        int handleWidth = resizeHandle.getMeasuredWidth() > 0 ? resizeHandle.getMeasuredWidth() : dp(32);
+        int handleHeight = resizeHandle.getMeasuredHeight() > 0 ? resizeHandle.getMeasuredHeight() : dp(32);
+        resizeHandle.setX(Math.max(0, baseOverlayWidth * scale - handleWidth));
+        resizeHandle.setY(Math.max(0, baseOverlayHeight * scale - handleHeight));
     }
 
     private void syncWindowBounds(float scale) {
         if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        // A View é escalada visualmente, mas a janela mantém o tamanho lógico
-        // original. Reduzir também os bounds da WindowManager fazia o conteúdo
-        // escalado ser recortado e deixava os targets tácteis deslocados.
-        // Assim, a transformação é aplicada ao player inteiro e o sistema de
-        // toque continua a usar a mesma origem (canto superior esquerdo).
-        windowParams.width = Math.max(1, baseOverlayWidth);
-        windowParams.height = Math.max(1, baseOverlayHeight);
+        // A janela e o conteúdo usam a mesma escala. A raiz mantém escala 1,
+        // evitando que o Android faça hit-testing com uma matriz diferente da
+        // que desenha os botões.
+        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
+        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
