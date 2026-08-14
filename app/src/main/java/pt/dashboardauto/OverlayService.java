@@ -33,6 +33,8 @@ import android.content.res.Configuration;
 
 public class OverlayService extends Service {
     private static volatile boolean active;
+    // Permite compactar o player para libertar espaço, mantendo sempre os
+    // controlos utilizáveis durante a condução.
     private static final float MIN_OVERLAY_SCALE = .70f;
     private static final float MAX_OVERLAY_SCALE = 1.25f;
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
@@ -235,9 +237,9 @@ public class OverlayService extends Service {
         // O redimensionador pertence ao player completo, separado do botão de expandir.
         playerContent = content;
         addResizeHandle(overlay);
-        float savedScale = clampOverlayScale(getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f));
-        content.setScaleX(savedScale);
-        content.setScaleY(savedScale);
+        final float requestedScale = clampOverlayScale(getSharedPreferences("dashboard_auto", MODE_PRIVATE).getFloat("overlay_scale", 1f));
+        content.setScaleX(requestedScale);
+        content.setScaleY(requestedScale);
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getInt("overlay_x", dp(16));
@@ -245,9 +247,11 @@ public class OverlayService extends Service {
         windowParams = params;
         try {
             manager.addView(overlay, params);
+            FrameLayout createdOverlay = overlay;
             overlay.post(() -> {
-                baseOverlayWidth = overlay.getMeasuredWidth();
-                baseOverlayHeight = overlay.getMeasuredHeight();
+                if (overlay != createdOverlay) return;
+                baseOverlayWidth = content.getMeasuredWidth() > 0 ? content.getMeasuredWidth() : overlay.getMeasuredWidth();
+                baseOverlayHeight = content.getMeasuredHeight() > 0 ? content.getMeasuredHeight() : overlay.getMeasuredHeight();
                 // Mantém o layout lógico estável. Se o WindowManager medir
                 // novamente este LinearLayout com os bounds já reduzidos,
                 // alguns controlos podem ser comprimidos ou cortados.
@@ -255,15 +259,21 @@ public class OverlayService extends Service {
                 contentParams.width = baseOverlayWidth;
                 contentParams.height = baseOverlayHeight;
                 content.setLayoutParams(contentParams);
-                positionResizeHandle(savedScale);
-                syncWindowBounds(savedScale);
-                clampOverlayPosition();
+                overlay.requestLayout();
+                overlay.post(() -> {
+                    if (overlay != createdOverlay) return;
+                    float effectiveScale = clampOverlayScale(requestedScale);
+                    content.setScaleX(effectiveScale * .92f);
+                    content.setScaleY(effectiveScale * .92f);
+                    positionResizeHandle(effectiveScale);
+                    syncWindowBounds(effectiveScale);
+                    clampOverlayPosition();
+                    getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putFloat("overlay_scale", effectiveScale).apply();
+                    content.animate().scaleX(effectiveScale).scaleY(effectiveScale).setDuration(220).start();
+                    overlay.animate().alpha(1f).setDuration(220).start();
+                });
             });
             overlay.setAlpha(0f);
-            content.setScaleX(savedScale * .92f);
-            content.setScaleY(savedScale * .92f);
-            content.animate().scaleX(savedScale).scaleY(savedScale).setDuration(220).start();
-            overlay.animate().alpha(1f).setDuration(220).start();
             refreshHandler.post(refreshTrack);
         } catch (WindowManager.BadTokenException | SecurityException error) {
             overlay = null;
@@ -451,6 +461,11 @@ public class OverlayService extends Service {
             pendingDragX = startX;
             pendingDragY = startY;
             dragMoved = false;
+            if (musicInfoContainer != null) {
+                musicInfoContainer.animate().cancel();
+                musicInfoContainer.setTranslationX(0f);
+                musicInfoContainer.setAlpha(1f);
+            }
             if (overlay != null) {
                 overlay.animate().cancel();
                 overlay.setTranslationX(0f);
@@ -520,20 +535,12 @@ public class OverlayService extends Service {
             float deltaY = event.getRawY() - downY;
             float deltaX = event.getRawX() - downX;
             int screenHeight = getResources().getDisplayMetrics().heightPixels;
-            boolean overTopZone = event.getRawY() <= dp(112);
             boolean overDropZone = event.getRawY() > screenHeight - dp(180);
             dropZoneActive = false;
             hideDropZone();
             boolean verticalSwipe = Math.abs(deltaY) > Math.abs(deltaX) * 1.2f
                     || Math.abs(velocityY) > Math.abs(velocityX) * 1.2f;
-            boolean fastUpwardSwipe = velocityY < -dp(900f);
             boolean fastDownwardSwipe = velocityY > dp(900f);
-            if (dragMoved && !expanded && overTopZone
-                    && (deltaY < -dp(64) || fastUpwardSwipe) && verticalSwipe) {
-                persistOverlayPosition();
-                toggleExpanded();
-                return true;
-            }
             if (!dragMoved && Math.abs(deltaX) < dp(12) && Math.abs(deltaY) < dp(12)) {
                 view.performClick();
                 return true;
@@ -650,6 +657,11 @@ public class OverlayService extends Service {
             overlay.setTranslationX(0f);
             overlay.setTranslationY(0f);
         }
+        if (musicInfoContainer != null) {
+            musicInfoContainer.animate().cancel();
+            musicInfoContainer.setTranslationX(0f);
+            musicInfoContainer.setAlpha(1f);
+        }
         if (overlay != null && manager != null) {
             try { manager.removeView(overlay); } catch (IllegalArgumentException ignored) { }
         }
@@ -686,7 +698,7 @@ public class OverlayService extends Service {
         if (index == 3) {
             Intent launch = new Intent(this, ComposeMainActivity.class);
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(launch);
+            try { startActivity(launch); } catch (RuntimeException ignored) { }
             return;
         }
         if (index == 4) { toggleExpanded(); return; }
@@ -761,7 +773,7 @@ public class OverlayService extends Service {
         if (dropZone != null || manager == null) return;
         dropZoneTop = top;
         dropZone = new TextView(this);
-        dropZone.setText(top ? "↑  Soltar para expandir  ↑" : "↓  Soltar para fechar  ↓");
+        dropZone.setText(top ? "↑  Soltar no topo  ↑" : "↓  Soltar para fechar  ↓");
         dropZone.setTextColor(Color.WHITE);
         dropZone.setTextSize(12);
         dropZone.setGravity(Gravity.CENTER);
@@ -784,7 +796,7 @@ public class OverlayService extends Service {
     private void setDropZoneMode(boolean top) {
         if (dropZone == null || dropZoneParams == null || dropZoneTop == top) return;
         dropZoneTop = top;
-        dropZone.setText(top ? "↑  Soltar para expandir  ↑" : "↓  Soltar para fechar  ↓");
+        dropZone.setText(top ? "↑  Soltar no topo  ↑" : "↓  Soltar para fechar  ↓");
         dropZoneParams.gravity = (top ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
         dropZoneParams.y = top ? dp(18) : dp(10);
         try { manager.updateViewLayout(dropZone, dropZoneParams); } catch (IllegalArgumentException ignored) { }
@@ -967,7 +979,10 @@ public class OverlayService extends Service {
         String packageName = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString(key, "");
         if (packageName.isEmpty()) return;
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
-        if (launch != null) { launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(launch); }
+        if (launch != null) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            try { startActivity(launch); } catch (RuntimeException ignored) { }
+        }
     }
 
     private void showAudioChooser() {
