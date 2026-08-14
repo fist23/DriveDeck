@@ -56,7 +56,6 @@ public class OverlayService extends Service {
     private boolean userSeeking;
     private TextView dropZone;
     private WindowManager.LayoutParams dropZoneParams;
-    private boolean dropZoneTop;
     private boolean playingState;
     private String lastTrackValue;
     private String pendingTrackValue;
@@ -250,6 +249,7 @@ public class OverlayService extends Service {
             FrameLayout createdOverlay = overlay;
             overlay.post(() -> {
                 if (overlay != createdOverlay) return;
+                measureLogicalContent(content);
                 baseOverlayWidth = content.getMeasuredWidth() > 0 ? content.getMeasuredWidth() : overlay.getMeasuredWidth();
                 baseOverlayHeight = content.getMeasuredHeight() > 0 ? content.getMeasuredHeight() : overlay.getMeasuredHeight();
                 // Mantém o layout lógico estável. Se o WindowManager medir
@@ -262,6 +262,22 @@ public class OverlayService extends Service {
                 overlay.requestLayout();
                 overlay.post(() -> {
                     if (overlay != createdOverlay) return;
+                    // A expansão/recolha recria os controlos. Forçar uma nova
+                    // medição aqui evita reutilizar os bounds da janela antiga,
+                    // que era o motivo de botões ficarem cortados após resize.
+                    measureLogicalContent(content);
+                    int measuredWidth = content.getMeasuredWidth();
+                    int measuredHeight = content.getMeasuredHeight();
+                    if (measuredWidth > 0 && measuredHeight > 0
+                            && (measuredWidth != baseOverlayWidth || measuredHeight != baseOverlayHeight)) {
+                        baseOverlayWidth = measuredWidth;
+                        baseOverlayHeight = measuredHeight;
+                        FrameLayout.LayoutParams stableParams = (FrameLayout.LayoutParams) content.getLayoutParams();
+                        stableParams.width = baseOverlayWidth;
+                        stableParams.height = baseOverlayHeight;
+                        content.setLayoutParams(stableParams);
+                        overlay.requestLayout();
+                    }
                     float effectiveScale = clampOverlayScale(requestedScale);
                     content.setScaleX(effectiveScale * .92f);
                     content.setScaleY(effectiveScale * .92f);
@@ -279,6 +295,11 @@ public class OverlayService extends Service {
             overlay = null;
             stopSelf();
         }
+    }
+
+    private void measureLogicalContent(android.view.View content) {
+        int unspecified = android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED);
+        content.measure(unspecified, unspecified);
     }
 
     private GradientDrawable panelBackground() {
@@ -478,10 +499,8 @@ public class OverlayService extends Service {
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
             if (dragVelocity != null) dragVelocity.addMovement(event);
             if (Math.abs(event.getRawX() - downX) > dragTouchSlop || Math.abs(event.getRawY() - downY) > dragTouchSlop) dragMoved = true;
-            if (dragMoved) {
-                boolean movingToTop = event.getRawY() < downY - dp(12);
-                setDropZoneMode(movingToTop);
-            }
+            // A drop zone existe apenas na parte inferior e serve exclusivamente
+            // para fechar o mini player. Nunca a mover para o topo.
             int screenWidth = getResources().getDisplayMetrics().widthPixels;
             int screenHeight = getResources().getDisplayMetrics().heightPixels;
             int draggedX = Math.max(0, startX + (int) (event.getRawX() - downX));
@@ -769,11 +788,10 @@ public class OverlayService extends Service {
                 .start();
     }
 
-    private void showDropZone(boolean top) {
+    private void showDropZone(boolean ignoredTop) {
         if (dropZone != null || manager == null) return;
-        dropZoneTop = top;
         dropZone = new TextView(this);
-        dropZone.setText(top ? "↑  Soltar no topo  ↑" : "↓  Soltar para fechar  ↓");
+        dropZone.setText("↓  Soltar para fechar  ↓");
         dropZone.setTextColor(Color.WHITE);
         dropZone.setTextSize(12);
         dropZone.setGravity(Gravity.CENTER);
@@ -783,23 +801,14 @@ public class OverlayService extends Service {
                 dp(210), dp(48), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT);
-        params.gravity = (top ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
-        params.y = top ? dp(18) : dp(10);
+        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        params.y = dp(10);
         dropZoneParams = params;
         try {
             manager.addView(dropZone, params);
             dropZone.setAlpha(0f);
             dropZone.animate().alpha(1f).setDuration(140).start();
         } catch (RuntimeException ignored) { dropZone = null; }
-    }
-
-    private void setDropZoneMode(boolean top) {
-        if (dropZone == null || dropZoneParams == null || dropZoneTop == top) return;
-        dropZoneTop = top;
-        dropZone.setText(top ? "↑  Soltar no topo  ↑" : "↓  Soltar para fechar  ↓");
-        dropZoneParams.gravity = (top ? Gravity.TOP : Gravity.BOTTOM) | Gravity.CENTER_HORIZONTAL;
-        dropZoneParams.y = top ? dp(18) : dp(10);
-        try { manager.updateViewLayout(dropZone, dropZoneParams); } catch (IllegalArgumentException ignored) { }
     }
 
     private GradientDrawable dropZoneBackground(boolean active) {
