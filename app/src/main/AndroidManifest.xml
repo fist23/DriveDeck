@@ -34,7 +34,11 @@
             android:exported="false"
             android:resizeableActivity="true"
             android:launchMode="singleTop"
-            android:theme="@style/AppTheme" />
+            android:theme="@style/AppTheme">
+            <layout
+                android:minWidth="160dp"
+                android:minHeight="160dp" />
+        </activity>
         <service
             android:name=".OverlayService"
             android:exported="false"

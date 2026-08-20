@@ -12,6 +12,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -112,6 +114,7 @@ public final class SplitPlayerActivity extends Activity {
         labels.addView(artist, new LinearLayout.LayoutParams(-1, -2));
         media.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
         panel.addView(media, new LinearLayout.LayoutParams(-1, dp(80)));
+        installMediaGestures(media);
 
         time = text("0:00 / 0:00", 10, Color.rgb(160, 160, 170));
         panel.addView(time, new LinearLayout.LayoutParams(-1, dp(22)));
@@ -151,6 +154,45 @@ public final class SplitPlayerActivity extends Activity {
         root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
         root.getViewTreeObserver().addOnGlobalLayoutListener(() -> adaptToWindowWidth(root.getWidth()));
         return root;
+    }
+
+    private void installMediaGestures(View target) {
+        GestureDetector detector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent event) { return true; }
+
+            @Override public boolean onDoubleTap(MotionEvent event) {
+                MusicController.playPause(SplitPlayerActivity.this);
+                renderPlayer();
+                target.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                return true;
+            }
+
+            @Override public boolean onFling(MotionEvent start, MotionEvent end, float velocityX, float velocityY) {
+                float deltaX = end.getX() - start.getX();
+                float deltaY = end.getY() - start.getY();
+                float minimumDistance = dp(48);
+                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > minimumDistance && Math.abs(velocityX) > dp(180f)) {
+                    if (deltaX < 0) MusicController.next(SplitPlayerActivity.this);
+                    else MusicController.previous(SplitPlayerActivity.this);
+                    target.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                    return true;
+                }
+                if (deltaY > minimumDistance && Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(velocityY) > dp(180f)) {
+                    finish();
+                    return true;
+                }
+                return false;
+            }
+        });
+        target.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                view.animate().scaleX(.985f).scaleY(.985f).setDuration(70).start();
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                view.animate().scaleX(1f).scaleY(1f).setDuration(110).start();
+            }
+            detector.onTouchEvent(event);
+            return true;
+        });
     }
 
     private void adaptToWindowWidth(int width) {
@@ -256,6 +298,7 @@ public final class SplitPlayerActivity extends Activity {
         GradientDrawable background = new GradientDrawable(); background.setColor(Color.rgb(18, 18, 23)); background.setCornerRadius(dp(18)); return background;
     }
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
+    private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
     private String formatTime(long milliseconds) {
         long totalSeconds = Math.max(0L, milliseconds) / 1000L;
         return (totalSeconds / 60L) + ":" + (totalSeconds % 60L < 10 ? "0" : "") + (totalSeconds % 60L);
