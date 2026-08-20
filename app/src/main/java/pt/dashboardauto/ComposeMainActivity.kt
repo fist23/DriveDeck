@@ -139,6 +139,14 @@ class ComposeMainActivity : ComponentActivity() {
             PermissionManager.openOverlaySettings(this)
             return
         }
+        if (prefs.getBoolean("navigation_split_player", false)) {
+            try {
+                startActivity(Intent(this, SplitPlayerActivity::class.java))
+            } catch (_: RuntimeException) {
+                Toast.makeText(this, "Não foi possível abrir o modo dividido.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         val service = Intent(this, OverlayService::class.java).putExtra("launch_apps", true).putExtra("launch_mode", "car_mode")
         try {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
@@ -429,12 +437,12 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                 }
                 SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
-                SettingsRow(Icons.Rounded.Home, "Player compacto sobre a navegação", compactNavigationPlayer) {
+                SettingsRow(Icons.Rounded.Home, "Split-screen: navegação + player", compactNavigationPlayer) {
                     compactNavigationPlayer = !compactNavigationPlayer
                     prefs.edit().putBoolean("navigation_split_player", compactNavigationPlayer).apply()
                 }
                 Text(
-                    "Ao iniciar o Car Mode, a navegação fica visível e o player aparece reduzido por cima.",
+                    "Tenta dividir o ecrã: navegação maior e player numa área menor ajustável.",
                     color = Color(0xFFAAAAB4),
                     style = MaterialTheme.typography.bodySmall
                 )
