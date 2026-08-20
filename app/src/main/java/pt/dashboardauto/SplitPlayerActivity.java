@@ -316,7 +316,12 @@ public final class SplitPlayerActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         if (!closeReceiverRegistered) {
-            registerReceiver(closeReceiver, new IntentFilter(OverlayService.ACTION_CLOSE_EVERYTHING));
+            IntentFilter filter = new IntentFilter(OverlayService.ACTION_CLOSE_EVERYTHING);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(closeReceiver, filter, RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(closeReceiver, filter);
+            }
             closeReceiverRegistered = true;
         }
     }
