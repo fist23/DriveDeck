@@ -121,9 +121,45 @@ public class OverlayService extends Service {
             if (PermissionManager.canDrawOverlay(this)) addOverlay();
             return START_NOT_STICKY;
         }
+        boolean launchApps = intent != null && intent.getBooleanExtra("launch_apps", false);
+        if (launchApps && getSharedPreferences("dashboard_auto", MODE_PRIVATE)
+                .getBoolean("navigation_split_player", false)) {
+            activateNavigationSplitPlayer();
+        }
         if (overlay == null && PermissionManager.canDrawOverlay(this)) addOverlay();
-        if (intent != null && intent.getBooleanExtra("launch_apps", false)) CarModeLauncher.openConfiguredApps(this, intent.getStringExtra("launch_mode"));
+        if (launchApps) CarModeLauncher.openConfiguredApps(this, intent.getStringExtra("launch_mode"));
         return START_NOT_STICKY;
+    }
+
+    private void activateNavigationSplitPlayer() {
+        android.content.SharedPreferences preferences = getSharedPreferences("dashboard_auto", MODE_PRIVATE);
+        if (!preferences.getBoolean("navigation_split_player_active", false)) {
+            preferences.edit()
+                    .putBoolean("navigation_split_player_active", true)
+                    .putFloat("navigation_split_previous_scale", preferences.getFloat("overlay_scale", 1f))
+                    .putBoolean("navigation_split_previous_expanded", expanded)
+                    .putFloat("overlay_scale", .75f)
+                    .putBoolean("overlay_expanded", false)
+                    .apply();
+            expanded = false;
+            if (overlay != null) {
+                removeOverlay();
+                addOverlay();
+            }
+        }
+    }
+
+    private void restoreNavigationSplitPlayer() {
+        android.content.SharedPreferences preferences = getSharedPreferences("dashboard_auto", MODE_PRIVATE);
+        if (!preferences.getBoolean("navigation_split_player_active", false)) return;
+        expanded = preferences.getBoolean("navigation_split_previous_expanded", false);
+        preferences.edit()
+                .putFloat("overlay_scale", preferences.getFloat("navigation_split_previous_scale", 1f))
+                .putBoolean("overlay_expanded", expanded)
+                .remove("navigation_split_player_active")
+                .remove("navigation_split_previous_scale")
+                .remove("navigation_split_previous_expanded")
+                .apply();
     }
 
     private void addOverlay() {
@@ -1057,6 +1093,7 @@ public class OverlayService extends Service {
     }
 
     @Override public void onDestroy() {
+        restoreNavigationSplitPlayer();
         removeOverlay();
         active = false;
         super.onDestroy();

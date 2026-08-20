@@ -382,6 +382,7 @@ class ComposeMainActivity : ComponentActivity() {
     ) {
         var bluetoothMode by remember { mutableStateOf(prefs.getString("bluetooth_launch_mode", "car_mode") ?: "car_mode") }
         var autoplay by remember { mutableStateOf(prefs.getBoolean("auto_play_music_on_car_mode", true)) }
+        var compactNavigationPlayer by remember { mutableStateOf(prefs.getBoolean("navigation_split_player", false)) }
         var autoBluetooth by remember { mutableStateOf(prefs.getBoolean("auto_bluetooth", false)) }
         var closeOnDisconnect by remember { mutableStateOf(prefs.getBoolean("close_on_bluetooth_disconnect", true)) }
         var pauseOnDisconnect by remember { mutableStateOf(prefs.getBoolean("pause_music_on_bluetooth_disconnect", false)) }
@@ -428,6 +429,15 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                 }
                 SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
+                SettingsRow(Icons.Rounded.Home, "Player compacto sobre a navegação", compactNavigationPlayer) {
+                    compactNavigationPlayer = !compactNavigationPlayer
+                    prefs.edit().putBoolean("navigation_split_player", compactNavigationPlayer).apply()
+                }
+                Text(
+                    "Ao iniciar o Car Mode, a navegação fica visível e o player aparece reduzido por cima.",
+                    color = Color(0xFFAAAAB4),
+                    style = MaterialTheme.typography.bodySmall
+                )
                 SettingsRow(Icons.Rounded.Close, "Fechar ao desligar Bluetooth", closeOnDisconnect) {
                     closeOnDisconnect = !closeOnDisconnect
                     prefs.edit().putBoolean("close_on_bluetooth_disconnect", closeOnDisconnect).apply()
