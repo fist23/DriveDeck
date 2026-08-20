@@ -14,8 +14,8 @@ android {
         applicationId = "pt.dashboardauto"
         minSdk = 26
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.9.12"
+        versionCode = 30
+        versionName = "0.9.13"
     }
     buildFeatures {
         compose = true

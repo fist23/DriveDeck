@@ -29,6 +29,13 @@ public final class SplitPlayerActivity extends Activity {
     private ImageView artwork;
     private ImageButton playButton;
     private SeekBar progress;
+    private LinearLayout playerPanel;
+    private TextView heading;
+    private LinearLayout mediaRow;
+    private LinearLayout labels;
+    private LinearLayout controlRow;
+    private TextView closeButton;
+    private int lastResponsiveWidth;
     private long durationMs;
     private boolean userSeeking;
     private boolean navigationRequested;
@@ -80,20 +87,22 @@ public final class SplitPlayerActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(10, 10, 14));
         LinearLayout panel = new LinearLayout(this);
+        playerPanel = panel;
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(10), dp(12), dp(10));
         panel.setBackground(panelBackground());
-        TextView heading = text("DriveDeck  •  Player", 16, Color.WHITE);
+        heading = text("DriveDeck  •  Player", 16, Color.WHITE);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(42)));
 
         LinearLayout media = new LinearLayout(this);
+        mediaRow = media;
         media.setGravity(Gravity.CENTER_VERTICAL);
         artwork = new ImageView(this);
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.setBackgroundColor(Color.rgb(48, 30, 42));
         media.addView(artwork, new LinearLayout.LayoutParams(dp(68), dp(68)));
-        LinearLayout labels = new LinearLayout(this);
+        labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL);
         labels.setPadding(dp(10), 0, 0, 0);
@@ -122,6 +131,7 @@ public final class SplitPlayerActivity extends Activity {
         panel.addView(progress, new LinearLayout.LayoutParams(-1, dp(28)));
 
         LinearLayout controls = new LinearLayout(this);
+        controlRow = controls;
         controls.setGravity(Gravity.CENTER);
         ImageButton previous = button(R.drawable.ic_skip_previous, "Faixa anterior");
         playButton = button(R.drawable.ic_play, "Reproduzir ou pausar");
@@ -134,12 +144,48 @@ public final class SplitPlayerActivity extends Activity {
         controls.addView(next, controlParams());
         panel.addView(controls, new LinearLayout.LayoutParams(-1, dp(76)));
 
-        TextView close = text("Fechar player dividido", 12, Color.rgb(170, 170, 180));
-        close.setGravity(Gravity.CENTER);
-        close.setOnClickListener(v -> finish());
-        panel.addView(close, new LinearLayout.LayoutParams(-1, dp(42)));
+        closeButton = text("Fechar player dividido", 12, Color.rgb(170, 170, 180));
+        closeButton.setGravity(Gravity.CENTER);
+        closeButton.setOnClickListener(v -> finish());
+        panel.addView(closeButton, new LinearLayout.LayoutParams(-1, dp(42)));
         root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
+        root.getViewTreeObserver().addOnGlobalLayoutListener(() -> adaptToWindowWidth(root.getWidth()));
         return root;
+    }
+
+    private void adaptToWindowWidth(int width) {
+        if (width <= 0 || width == lastResponsiveWidth || playerPanel == null) return;
+        lastResponsiveWidth = width;
+        boolean narrow = width < dp(360);
+        boolean veryNarrow = width < dp(285);
+        int padding = dp(narrow ? 8 : 12);
+        playerPanel.setPadding(padding, dp(narrow ? 6 : 10), padding, dp(narrow ? 6 : 10));
+        heading.setTextSize(narrow ? 14 : 16);
+        heading.setText(narrow ? "DriveDeck" : "DriveDeck  •  Player");
+        updateSize(mediaRow, -1, dp(narrow ? 62 : 80));
+        updateSize(artwork, dp(narrow ? 50 : 68), dp(narrow ? 50 : 68));
+        labels.setPadding(dp(narrow ? 7 : 10), 0, 0, 0);
+        track.setTextSize(narrow ? 13 : 15);
+        artist.setTextSize(narrow ? 10 : 12);
+        time.setVisibility(veryNarrow ? View.GONE : View.VISIBLE);
+        updateSize(progress, -1, dp(narrow ? 24 : 28));
+        updateSize(controlRow, -1, dp(narrow ? 68 : 76));
+        for (int i = 0; i < controlRow.getChildCount(); i++) {
+            View child = controlRow.getChildAt(i);
+            if (child instanceof ImageButton) {
+                int inset = dp(narrow ? 8 : 12);
+                child.setPadding(inset, inset, inset, inset);
+            }
+        }
+        updateSize(closeButton, -1, dp(narrow ? 36 : 42));
+    }
+
+    private void updateSize(View view, int width, int height) {
+        if (view == null || view.getLayoutParams() == null) return;
+        android.view.ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (width >= 0) params.width = width;
+        if (height >= 0) params.height = height;
+        view.setLayoutParams(params);
     }
 
     private void openNavigationAdjacent() {
