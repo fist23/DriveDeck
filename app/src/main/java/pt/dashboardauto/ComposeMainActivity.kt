@@ -135,16 +135,16 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun startCarMode() {
-        if (!PermissionManager.canDrawOverlay(this)) {
-            PermissionManager.openOverlaySettings(this)
-            return
-        }
         if (prefs.getBoolean("navigation_split_player", false)) {
             try {
-                startActivity(Intent(this, SplitPlayerActivity::class.java))
+                startActivity(Intent(this, CarDashboardActivity::class.java))
             } catch (_: RuntimeException) {
-                Toast.makeText(this, "Não foi possível abrir o modo dividido.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Não foi possível abrir o dashboard de condução.", Toast.LENGTH_LONG).show()
             }
+            return
+        }
+        if (!PermissionManager.canDrawOverlay(this)) {
+            PermissionManager.openOverlaySettings(this)
             return
         }
         val service = Intent(this, OverlayService::class.java).putExtra("launch_apps", true).putExtra("launch_mode", "car_mode")
@@ -437,12 +437,12 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                 }
                 SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
-                SettingsRow(Icons.Rounded.Home, "Split-screen: navegação + player", compactNavigationPlayer) {
+                SettingsRow(Icons.Rounded.Home, "Dashboard próprio: mapa + player", compactNavigationPlayer) {
                     compactNavigationPlayer = !compactNavigationPlayer
                     prefs.edit().putBoolean("navigation_split_player", compactNavigationPlayer).apply()
                 }
                 Text(
-                    "Tenta dividir o ecrã: navegação maior e player numa área menor ajustável.",
+                    "Usa mapa e player no mesmo ecrã, sem overlay nem split screen do Android.",
                     color = Color(0xFFAAAAB4),
                     style = MaterialTheme.typography.bodySmall
                 )

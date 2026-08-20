@@ -23,7 +23,9 @@ public final class CarModeLauncher {
         boolean autoPlay = preferences.getBoolean("auto_play_music_on_car_mode", true);
         boolean androidAutoActive = isAndroidAutoActive(context);
         if (preferences.getBoolean("navigation_split_player", false)) {
-            SplitPlayerActivity.open(context);
+            Intent dashboard = new Intent(context, CarDashboardActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            try { context.startActivity(dashboard); } catch (RuntimeException ignored) { }
             return;
         }
         if ("music_only".equals(mode)) {

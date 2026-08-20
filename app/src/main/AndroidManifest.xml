@@ -30,6 +30,13 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".CarDashboardActivity"
+            android:exported="false"
+            android:screenOrientation="unspecified"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:theme="@style/AppTheme" />
+        <activity
             android:name=".SplitPlayerActivity"
             android:exported="false"
             android:resizeableActivity="true"
