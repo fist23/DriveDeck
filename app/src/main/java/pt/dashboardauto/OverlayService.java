@@ -38,6 +38,7 @@ public class OverlayService extends Service {
     private static final float MIN_OVERLAY_SCALE = .70f;
     private static final float MAX_OVERLAY_SCALE = 1.25f;
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
+    public static final String ACTION_CLOSE_EVERYTHING = "pt.dashboardauto.action.CLOSE_EVERYTHING";
     private static final String ACTION_RESET_LAYOUT = "pt.dashboardauto.action.RESET_LAYOUT";
     private static final String ACTION_REBUILD_LAYOUT = "pt.dashboardauto.action.REBUILD_LAYOUT";
     private WindowManager manager;
@@ -108,6 +109,10 @@ public class OverlayService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_CLOSE_EVERYTHING.equals(intent.getAction())) {
+            closeEverything();
+            return START_NOT_STICKY;
+        }
         if (intent != null && ACTION_CLOSE_PLAYER.equals(intent.getAction())) {
             stopSelf();
             return START_NOT_STICKY;
@@ -786,6 +791,7 @@ public class OverlayService extends Service {
     }
 
     private void closeEverything() {
+        sendBroadcast(new Intent(ACTION_CLOSE_EVERYTHING).setPackage(getPackageName()));
         stopSelf();
         Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);

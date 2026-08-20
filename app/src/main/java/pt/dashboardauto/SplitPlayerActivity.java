@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.ActivityOptions;
 import android.content.Context;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
@@ -42,6 +44,12 @@ public final class SplitPlayerActivity extends Activity {
     private boolean userSeeking;
     private boolean navigationRequested;
     private BitmapKey renderedArtwork;
+    private boolean closeReceiverRegistered;
+    private final BroadcastReceiver closeReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (OverlayService.ACTION_CLOSE_EVERYTHING.equals(intent.getAction())) finishAndRemoveTask();
+        }
+    };
 
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
@@ -305,4 +313,18 @@ public final class SplitPlayerActivity extends Activity {
     }
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
+    @Override protected void onStart() {
+        super.onStart();
+        if (!closeReceiverRegistered) {
+            registerReceiver(closeReceiver, new IntentFilter(OverlayService.ACTION_CLOSE_EVERYTHING));
+            closeReceiverRegistered = true;
+        }
+    }
+    @Override protected void onDestroy() {
+        if (closeReceiverRegistered) {
+            unregisterReceiver(closeReceiver);
+            closeReceiverRegistered = false;
+        }
+        super.onDestroy();
+    }
 }

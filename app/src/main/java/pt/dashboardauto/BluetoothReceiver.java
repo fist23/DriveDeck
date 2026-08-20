@@ -50,7 +50,16 @@ public class BluetoothReceiver extends BroadcastReceiver {
                     return;
                 }
                 if (latest.getBoolean("pause_music_on_bluetooth_disconnect", false)) MusicController.pause(context);
-                if (latest.getBoolean("close_on_bluetooth_disconnect", true)) context.stopService(new Intent(context, OverlayService.class));
+                if (latest.getBoolean("close_on_bluetooth_disconnect", true)) {
+                    Intent closeEverything = new Intent(context, OverlayService.class)
+                            .setAction(OverlayService.ACTION_CLOSE_EVERYTHING);
+                    try {
+                        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(closeEverything);
+                        else context.startService(closeEverything);
+                    } catch (RuntimeException error) {
+                        Log.e("DriveDeckBT", "Não foi possível fechar o Car Mode", error);
+                    }
+                }
             }, 1200L);
             return;
         }
