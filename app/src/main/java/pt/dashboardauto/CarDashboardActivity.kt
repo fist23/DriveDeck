@@ -26,6 +26,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.text.KeyboardOptions
@@ -123,6 +126,11 @@ class CarDashboardActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         dashboardMapView?.onStart()
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        ) {
+            startLocationUpdates()
+        }
     }
 
     override fun onResume() {
@@ -445,24 +453,37 @@ class CarDashboardActivity : ComponentActivity() {
         val portrait = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
         MaterialTheme {
             BoxWithConstraints(
-                modifier = Modifier.fillMaxSize().background(Color(0xFF0B0D12)).padding(10.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .background(Color(0xFF0B0D12))
+                    .padding(10.dp)
             ) {
                 val density = LocalDensity.current
                 val availableHeightPx = with(density) { maxHeight.toPx() }
                 val availableWidthPx = with(density) { maxWidth.toPx() }
                 if (portrait) {
+                    val dividerPx = with(density) { 12.dp.toPx() }
+                    val usableHeight = (availableHeightPx - dividerPx).coerceAtLeast(1f)
+                    val minMapFraction = (with(density) { 220.dp.toPx() } / usableHeight).coerceIn(0f, 1f)
+                    val maxMapFraction = (1f - with(density) { 190.dp.toPx() } / usableHeight).coerceIn(0f, 1f)
+                    val safeFraction = if (minMapFraction <= maxMapFraction) {
+                        navigationFraction.coerceIn(minMapFraction, maxMapFraction)
+                    } else {
+                        0.5f
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         MapPane(
-                            modifier = Modifier.weight(navigationFraction).fillMaxWidth(),
+                            modifier = Modifier.weight(safeFraction).fillMaxWidth(),
                             navigationPackage = navigationPackage,
                             onRecenter = { recenterOnVehicle() },
                             onClose = { finish() }
                         )
                         SplitDivider(vertical = false) { delta ->
-                            navigationFraction = (navigationFraction + delta / availableHeightPx).coerceIn(0.25f, 0.82f)
+                            navigationFraction = (safeFraction + delta / usableHeight).coerceIn(0.20f, 0.88f)
                         }
                         PlayerPane(
-                            modifier = Modifier.weight(1f - navigationFraction).fillMaxWidth(),
+                            modifier = Modifier.weight(1f - safeFraction).fillMaxWidth(),
                             track = track,
                             artist = artist,
                             playing = playing,
@@ -472,18 +493,27 @@ class CarDashboardActivity : ComponentActivity() {
                         )
                     }
                 } else {
+                    val dividerPx = with(density) { 12.dp.toPx() }
+                    val usableWidth = (availableWidthPx - dividerPx).coerceAtLeast(1f)
+                    val minMapFraction = (with(density) { 320.dp.toPx() } / usableWidth).coerceIn(0f, 1f)
+                    val maxMapFraction = (1f - with(density) { 260.dp.toPx() } / usableWidth).coerceIn(0f, 1f)
+                    val safeFraction = if (minMapFraction <= maxMapFraction) {
+                        navigationFraction.coerceIn(minMapFraction, maxMapFraction)
+                    } else {
+                        0.5f
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MapPane(
-                            modifier = Modifier.weight(navigationFraction).fillMaxHeight(),
+                            modifier = Modifier.weight(safeFraction).fillMaxHeight(),
                             navigationPackage = navigationPackage,
                             onRecenter = { recenterOnVehicle() },
                             onClose = { finish() }
                         )
                         SplitDivider(vertical = true) { delta ->
-                            navigationFraction = (navigationFraction + delta / availableWidthPx).coerceIn(0.55f, 0.84f)
+                            navigationFraction = (safeFraction + delta / usableWidth).coerceIn(0.35f, 0.90f)
                         }
                         PlayerPane(
-                            modifier = Modifier.weight(1f - navigationFraction).fillMaxHeight(),
+                            modifier = Modifier.weight(1f - safeFraction).fillMaxHeight(),
                             track = track,
                             artist = artist,
                             playing = playing,
@@ -579,7 +609,7 @@ class CarDashboardActivity : ComponentActivity() {
                             onValueChange = { destination = it },
                             modifier = Modifier.weight(1f),
                             singleLine = true,
-                            label = { Text("Destino") },
+                            label = { Text("Destino opcional") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                         )
                         TextButton(
@@ -600,7 +630,7 @@ class CarDashboardActivity : ComponentActivity() {
                     modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("Mapa OpenFreeMap", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Text("Modo condução ativo · destino opcional", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     Text("OpenFreeMap © OpenMapTiles · dados OSM", color = Color(0xFFD0D2D8), style = MaterialTheme.typography.labelSmall)
                     if (navigationPackage.isNotBlank()) {
                         Button(
