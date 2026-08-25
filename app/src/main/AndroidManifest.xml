@@ -8,8 +8,6 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
@@ -30,23 +28,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
-        <activity
-            android:name=".CarDashboardActivity"
-            android:exported="false"
-            android:screenOrientation="unspecified"
-            android:resizeableActivity="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
-            android:theme="@style/AppTheme" />
-        <activity
-            android:name=".SplitPlayerActivity"
-            android:exported="false"
-            android:resizeableActivity="true"
-            android:launchMode="singleTop"
-            android:theme="@style/AppTheme">
-            <layout
-                android:minWidth="160dp"
-                android:minHeight="160dp" />
         </activity>
         <service
             android:name=".OverlayService"
@@ -87,6 +68,7 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+                <action android:name="pt.dashboardauto.action.UPDATE_INSTALL_COMPLETE" />
             </intent-filter>
         </receiver>
     </application>

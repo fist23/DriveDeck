@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 import java.util.concurrent.Executors
 
 object UpdateChecker {
@@ -13,6 +14,8 @@ object UpdateChecker {
     const val PENDING_UPDATE_VERSION = "pending_update_version"
     const val PENDING_UPDATE_DOWNLOAD_ID = "pending_update_download_id"
     const val DISMISSED_UPDATE_ALERT_VERSION = "dismissed_update_alert_version"
+    const val UPDATE_INSTALL_COMPLETE_ACTION = "pt.dashboardauto.action.UPDATE_INSTALL_COMPLETE"
+    const val TEMP_UPDATE_DIRECTORY = "updates"
     private val executor = Executors.newSingleThreadExecutor()
 
     data class UpdateInfo(
@@ -91,6 +94,15 @@ object UpdateChecker {
             .apply()
     }
 
+    @JvmStatic
+    fun cleanupTemporaryDownloads(context: Context) {
+        val directory = File(context.cacheDir, TEMP_UPDATE_DIRECTORY)
+        directory.listFiles()?.forEach { file ->
+            if (file.isFile) file.delete()
+        }
+        directory.delete()
+    }
+
     private fun installedVersion(context: Context): String = try {
         @Suppress("DEPRECATION")
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -104,6 +116,7 @@ object UpdateChecker {
         val pending = prefs.getString(PENDING_UPDATE_VERSION, "") ?: ""
         if (pending.isNotBlank() && (remote.isBlank() || compareVersions(current, pending) >= 0)) {
             clearPendingDownload(context)
+            cleanupTemporaryDownloads(context)
         }
     }
 

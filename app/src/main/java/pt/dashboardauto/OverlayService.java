@@ -129,44 +129,9 @@ public class OverlayService extends Service {
             return START_NOT_STICKY;
         }
         boolean launchApps = intent != null && intent.getBooleanExtra("launch_apps", false);
-        if (launchApps && getSharedPreferences("dashboard_auto", MODE_PRIVATE)
-                .getBoolean("navigation_split_player", false)) {
-            activateNavigationSplitPlayer();
-        }
         if (overlay == null && PermissionManager.canDrawOverlay(this)) addOverlay();
         if (launchApps) CarModeLauncher.openConfiguredApps(this, intent.getStringExtra("launch_mode"));
         return START_NOT_STICKY;
-    }
-
-    private void activateNavigationSplitPlayer() {
-        android.content.SharedPreferences preferences = getSharedPreferences("dashboard_auto", MODE_PRIVATE);
-        if (!preferences.getBoolean("navigation_split_player_active", false)) {
-            preferences.edit()
-                    .putBoolean("navigation_split_player_active", true)
-                    .putFloat("navigation_split_previous_scale", preferences.getFloat("overlay_scale", 1f))
-                    .putBoolean("navigation_split_previous_expanded", expanded)
-                    .putFloat("overlay_scale", .75f)
-                    .putBoolean("overlay_expanded", false)
-                    .apply();
-            expanded = false;
-            if (overlay != null) {
-                removeOverlay();
-                addOverlay();
-            }
-        }
-    }
-
-    private void restoreNavigationSplitPlayer() {
-        android.content.SharedPreferences preferences = getSharedPreferences("dashboard_auto", MODE_PRIVATE);
-        if (!preferences.getBoolean("navigation_split_player_active", false)) return;
-        expanded = preferences.getBoolean("navigation_split_previous_expanded", false);
-        preferences.edit()
-                .putFloat("overlay_scale", preferences.getFloat("navigation_split_previous_scale", 1f))
-                .putBoolean("overlay_expanded", expanded)
-                .remove("navigation_split_player_active")
-                .remove("navigation_split_previous_scale")
-                .remove("navigation_split_previous_expanded")
-                .apply();
     }
 
     private void addOverlay() {
@@ -299,13 +264,16 @@ public class OverlayService extends Service {
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         // Dynamic Island: posição fixa e centrada no topo. Não há resize nem
         // drag para impedir que o gesto de condução roube toques aos botões.
-        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.x = 0;
-        params.y = topIslandY();
+        applyIslandPosition(params);
         windowParams = params;
         try {
             manager.addView(overlay, params);
             FrameLayout createdOverlay = overlay;
+            overlay.setOnApplyWindowInsetsListener((view, insets) -> {
+                if (isCenterIslandPosition()) view.post(this::alignIslandToCutout);
+                return insets;
+            });
+            overlay.requestApplyInsets();
             overlay.post(() -> {
                 if (overlay != createdOverlay) return;
                 measureLogicalContent(content);
@@ -338,25 +306,28 @@ public class OverlayService extends Service {
                         overlay.requestLayout();
                     }
                     float effectiveScale = 1f;
-                    content.setScaleX(effectiveScale * .92f);
-                    content.setScaleY(effectiveScale * .92f);
+                    content.setScaleX(effectiveScale * (expanded ? .94f : .92f));
+                    content.setScaleY(effectiveScale * (expanded ? .68f : .92f));
+                    content.setAlpha(expanded ? .86f : 1f);
                     overlay.setPivotX(baseOverlayWidth / 2f);
                     overlay.setPivotY(0f);
-                    overlay.setScaleX(.96f);
-                    overlay.setScaleY(.90f);
+                    overlay.setScaleX(expanded ? .92f : .96f);
+                    overlay.setScaleY(expanded ? .76f : .90f);
+                    alignIslandToCutout();
                     clampOverlayPosition();
                     content.animate()
                             .scaleX(effectiveScale)
                             .scaleY(effectiveScale)
+                            .alpha(1f)
                             .setInterpolator(new OvershootInterpolator(1.08f))
-                            .setDuration(260)
+                            .setDuration(expanded ? 360 : 260)
                             .start();
                     overlay.animate()
                             .alpha(1f)
                             .scaleX(1f)
                             .scaleY(1f)
                             .setInterpolator(new DecelerateInterpolator(1.4f))
-                            .setDuration(240)
+                            .setDuration(expanded ? 340 : 240)
                             .start();
                 });
             });
@@ -374,11 +345,25 @@ public class OverlayService extends Service {
     }
 
     private GradientDrawable panelBackground() {
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(expanded ? Color.rgb(18, 18, 23) : Color.rgb(5, 6, 9));
+        GradientDrawable background = expanded
+                ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
+                    blendColor(accentColor(), Color.BLACK, .42f),
+                    Color.rgb(18, 25, 58),
+                    Color.rgb(7, 8, 17)})
+                : new GradientDrawable();
+        if (!expanded) background.setColor(Color.rgb(5, 6, 9));
         background.setCornerRadius(dp(expanded ? 22 : 32));
         background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
+    }
+
+    private int blendColor(int foreground, int background, float backgroundWeight) {
+        float weight = Math.max(0f, Math.min(1f, backgroundWeight));
+        float foregroundWeight = 1f - weight;
+        return Color.rgb(
+                Math.round(Color.red(foreground) * foregroundWeight + Color.red(background) * weight),
+                Math.round(Color.green(foreground) * foregroundWeight + Color.green(background) * weight),
+                Math.round(Color.blue(foreground) * foregroundWeight + Color.blue(background) * weight));
     }
 
     private GradientDrawable mediaBackground() {
@@ -716,7 +701,76 @@ public class OverlayService extends Service {
     private int topIslandY() {
         int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
         int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
-        return statusBarHeight + dp(8);
+        int cutoutInset = 0;
+        if (android.os.Build.VERSION.SDK_INT >= 28 && overlay != null && overlay.getRootWindowInsets() != null
+                && overlay.getRootWindowInsets().getDisplayCutout() != null) {
+            cutoutInset = overlay.getRootWindowInsets().getDisplayCutout().getSafeInsetTop();
+        }
+        if (isCenterIslandPosition() && cutoutInset > 0) return cutoutAlignedY();
+        return Math.max(statusBarHeight, cutoutInset) + dp(8);
+    }
+
+    private boolean isCenterIslandPosition() {
+        return "center".equals(getSharedPreferences("dashboard_auto", MODE_PRIVATE)
+                .getString("overlay_position", "center"));
+    }
+
+    private int cutoutAlignedY() {
+        if (android.os.Build.VERSION.SDK_INT < 28 || overlay == null || overlay.getRootWindowInsets() == null) {
+            return dp(8);
+        }
+        android.graphics.Rect selected = centralCutout();
+        if (selected == null) return dp(8);
+        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight : Math.max(dp(48), overlay.getHeight());
+        return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
+    }
+
+    private android.graphics.Rect centralCutout() {
+        if (android.os.Build.VERSION.SDK_INT < 28 || overlay == null || overlay.getRootWindowInsets() == null) return null;
+        android.view.DisplayCutout cutout = overlay.getRootWindowInsets().getDisplayCutout();
+        if (cutout == null || cutout.getBoundingRects().isEmpty()) return null;
+        int screenCenter = getResources().getDisplayMetrics().widthPixels / 2;
+        android.graphics.Rect selected = null;
+        int bestDistance = Integer.MAX_VALUE;
+        for (android.graphics.Rect rect : cutout.getBoundingRects()) {
+            int distance = Math.abs(rect.centerX() - screenCenter);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                selected = rect;
+            }
+        }
+        return selected;
+    }
+
+    private void alignIslandToCutout() {
+        if (!isCenterIslandPosition() || overlay == null || windowParams == null || manager == null) return;
+        android.graphics.Rect cutout = centralCutout();
+        if (cutout == null) return;
+        int islandWidth = visualOverlayWidth();
+        int maxX = Math.max(0, getResources().getDisplayMetrics().widthPixels - islandWidth);
+        int targetX = Math.max(0, Math.min(maxX, cutout.centerX() - islandWidth / 2));
+        int targetY = topIslandY();
+        int centerLeftGravity = Gravity.TOP | Gravity.LEFT;
+        if (windowParams.gravity == centerLeftGravity && windowParams.x == targetX && windowParams.y == targetY) return;
+        windowParams.gravity = centerLeftGravity;
+        windowParams.x = targetX;
+        windowParams.y = targetY;
+        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+    }
+
+    private void applyIslandPosition(WindowManager.LayoutParams params) {
+        String position = getSharedPreferences("dashboard_auto", MODE_PRIVATE)
+                .getString("overlay_position", "center");
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.x = 0;
+        params.y = topIslandY();
+        if ("left".equals(position)) {
+            params.gravity = Gravity.TOP | Gravity.LEFT;
+            params.x = dp(8);
+        } else if ("right".equals(position)) {
+            params.gravity = Gravity.TOP | Gravity.RIGHT;
+            params.x = dp(8);
+        }
     }
 
     private void clampOverlayPosition() {
@@ -750,8 +804,8 @@ public class OverlayService extends Service {
                 .apply();
         if (overlay == null || windowParams == null || manager == null) return;
         applyOverlayScale(1f, false);
-        windowParams.x = 0;
-        windowParams.y = topIslandY();
+        applyIslandPosition(windowParams);
+        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
         clampOverlayPosition();
     }
 
@@ -838,11 +892,11 @@ public class OverlayService extends Service {
         overlay.setPivotY(0f);
         overlay.animate()
                 .alpha(0f)
-                .scaleX(.90f)
-                .scaleY(.90f)
-                .translationY(-dp(4))
+                .scaleX(nextState ? 1.04f : .90f)
+                .scaleY(nextState ? .72f : .90f)
+                .translationY(nextState ? -dp(2) : -dp(4))
                 .setInterpolator(new DecelerateInterpolator(1.5f))
-                .setDuration(170)
+                .setDuration(nextState ? 135 : 170)
                 .withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();
@@ -1180,7 +1234,6 @@ public class OverlayService extends Service {
     }
 
     @Override public void onDestroy() {
-        restoreNavigationSplitPlayer();
         removeOverlay();
         active = false;
         super.onDestroy();

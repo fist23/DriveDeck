@@ -139,14 +139,6 @@ class ComposeMainActivity : ComponentActivity() {
             PermissionManager.openOverlaySettings(this)
             return
         }
-        if (prefs.getBoolean("navigation_split_player", false)) {
-            try {
-                startActivity(Intent(this, SplitPlayerActivity::class.java))
-            } catch (_: RuntimeException) {
-                Toast.makeText(this, "Não foi possível abrir o modo dividido.", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
         val service = Intent(this, OverlayService::class.java).putExtra("launch_apps", true).putExtra("launch_mode", "car_mode")
         try {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
@@ -247,13 +239,17 @@ class ComposeMainActivity : ComponentActivity() {
 
     private fun downloadUpdate(info: UpdateChecker.UpdateInfo) {
         val url = info.downloadUrl ?: return
+        val manager = getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        val previousDownload = prefs.getLong(UpdateChecker.PENDING_UPDATE_DOWNLOAD_ID, -1L)
+        if (previousDownload >= 0L) manager.remove(previousDownload)
+        UpdateChecker.clearPendingDownload(this)
+        UpdateChecker.cleanupTemporaryDownloads(this)
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("DriveDeck ${info.version}")
             .setDescription("A descarregar atualização")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "drivedeck-${info.version}.apk")
             .setMimeType("application/vnd.android.package-archive")
-        val manager = getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
         val downloadId = manager.enqueue(request)
         UpdateChecker.markDownloadStarted(this, info.version, downloadId)
         Toast.makeText(this, "Atualização a ser descarregada", Toast.LENGTH_LONG).show()
@@ -385,11 +381,11 @@ class ComposeMainActivity : ComponentActivity() {
     ) {
         var bluetoothMode by remember { mutableStateOf(prefs.getString("bluetooth_launch_mode", "car_mode") ?: "car_mode") }
         var autoplay by remember { mutableStateOf(prefs.getBoolean("auto_play_music_on_car_mode", true)) }
-        var compactNavigationPlayer by remember { mutableStateOf(prefs.getBoolean("navigation_split_player", false)) }
         var autoBluetooth by remember { mutableStateOf(prefs.getBoolean("auto_bluetooth", false)) }
         var closeOnDisconnect by remember { mutableStateOf(prefs.getBoolean("close_on_bluetooth_disconnect", true)) }
         var pauseOnDisconnect by remember { mutableStateOf(prefs.getBoolean("pause_music_on_bluetooth_disconnect", false)) }
         var controlSize by remember { mutableStateOf(prefs.getString("overlay_control_size", "normal") ?: "normal") }
+        var islandPosition by remember { mutableStateOf(prefs.getString("overlay_position", "center") ?: "center") }
         var returnNavigationDuringCall by remember { mutableStateOf(prefs.getBoolean("return_navigation_during_call", true)) }
         val selectedBluetoothAvailable = bluetoothAddress.isNotBlank() && bluetooth.any { it.address == bluetoothAddress }
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
@@ -430,15 +426,6 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                 }
                 SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
-                SettingsRow(Icons.Rounded.Home, "Split-screen: navegação + player", compactNavigationPlayer) {
-                    compactNavigationPlayer = !compactNavigationPlayer
-                    prefs.edit().putBoolean("navigation_split_player", compactNavigationPlayer).apply()
-                }
-                Text(
-                    "Tenta dividir o ecrã: navegação maior e player numa área menor ajustável.",
-                    color = Color(0xFFAAAAB4),
-                    style = MaterialTheme.typography.bodySmall
-                )
                 SettingsRow(Icons.Rounded.Close, "Fechar ao desligar Bluetooth", closeOnDisconnect) {
                     closeOnDisconnect = !closeOnDisconnect
                     prefs.edit().putBoolean("close_on_bluetooth_disconnect", closeOnDisconnect).apply()
@@ -448,6 +435,12 @@ class ComposeMainActivity : ComponentActivity() {
                     prefs.edit().putBoolean("pause_music_on_bluetooth_disconnect", pauseOnDisconnect).apply()
                 }
                 Text("Player", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                Text("Posição da Dynamic Island", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                IslandPositionPicker(islandPosition) {
+                    islandPosition = it
+                    prefs.edit().putString("overlay_position", it).apply()
+                    rebuildOverlay()
+                }
                 Text("Tamanho dos controlos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 ControlSizePicker(controlSize) {
                     controlSize = it
@@ -631,6 +624,25 @@ class ComposeMainActivity : ComponentActivity() {
         "purple" -> Color(0xFFBF5AF2)
         "amber" -> Color(0xFFFFB340)
         else -> Color(0xFF0A84FF)
+    }
+
+    @Composable
+    private fun IslandPositionPicker(value: String, onChange: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        val label = when (value) {
+            "left" -> "Esquerda — junto à margem"
+            "right" -> "Direita — junto à margem"
+            else -> "Centro — adaptado à câmara"
+        }
+        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(label, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher posição da Dynamic Island")
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(text = { Text("Centro — adaptado à câmara") }, onClick = { onChange("center"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Esquerda — junto à margem") }, onClick = { onChange("left"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Direita — junto à margem") }, onClick = { onChange("right"); menuExpanded = false })
+        }
     }
 
     @Composable

@@ -22,10 +22,6 @@ public final class CarModeLauncher {
         String navigation = preferences.getString("navigation_app", "");
         boolean autoPlay = preferences.getBoolean("auto_play_music_on_car_mode", true);
         boolean androidAutoActive = isAndroidAutoActive(context);
-        if (preferences.getBoolean("navigation_split_player", false)) {
-            SplitPlayerActivity.open(context);
-            return;
-        }
         if ("music_only".equals(mode)) {
             if (!music.isEmpty()) open(context, music);
             schedulePlay(context, autoPlay, 850);
