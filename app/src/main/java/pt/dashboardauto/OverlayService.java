@@ -10,7 +10,11 @@ import android.app.Service;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.PixelFormat;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.content.res.ColorStateList;
@@ -50,6 +54,7 @@ public class OverlayService extends Service {
     private android.view.View musicInfoContainer;
     private Bitmap renderedArtwork;
     private ImageButton playButton;
+    private AnimatedWaveDrawable playingDrawable;
     private ImageButton resizeHandle;
     private SeekBar progressBar;
     private android.widget.ProgressBar compactProgressBar;
@@ -143,6 +148,13 @@ public class OverlayService extends Service {
         content.setClipChildren(false);
         content.setOrientation(!expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER);
+        content.setClickable(true);
+        content.setOnClickListener(v -> {
+            if (!expanded) {
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+                toggleExpanded();
+            }
+        });
         content.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 4 : 3), dp(expanded ? 8 : 4), dp(expanded ? 4 : 3));
         content.setBackground(panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
@@ -524,19 +536,33 @@ public class OverlayService extends Service {
 
     private void setPlayButtonState(boolean playing, boolean animate) {
         if (playButton == null) return;
-        int icon = playing ? R.drawable.ic_pause : R.drawable.ic_play;
+        boolean showPlayingWaves = playing && !expanded;
         playButton.animate().cancel();
         playButton.setScaleX(1f);
         playButton.setScaleY(1f);
+        if (!showPlayingWaves && playingDrawable != null) {
+            playingDrawable.stop();
+            playingDrawable = null;
+        }
         if (!animate) {
             playButton.setRotation(0f);
             playButton.setAlpha(1f);
-            playButton.setImageResource(icon);
+            if (showPlayingWaves) {
+                playingDrawable = new AnimatedWaveDrawable(accentColor());
+                playButton.setImageDrawable(playingDrawable);
+            } else {
+                playButton.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
+            }
             return;
         }
         // Atualiza o estado antes da animação para que toques rápidos nunca
         // deixem uma animação anterior restaurar o ícone errado.
-        playButton.setImageResource(icon);
+        if (showPlayingWaves) {
+            playingDrawable = new AnimatedWaveDrawable(accentColor());
+            playButton.setImageDrawable(playingDrawable);
+        } else {
+            playButton.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        }
         playButton.setRotation(0f);
         playButton.setScaleX(.84f);
         playButton.setScaleY(.84f);
@@ -548,6 +574,49 @@ public class OverlayService extends Service {
                 .setInterpolator(new OvershootInterpolator(1.1f))
                 .setDuration(180)
                 .start();
+    }
+
+    /** Indicador leve de reprodução para o botão direito do player minimizado. */
+    private static final class AnimatedWaveDrawable extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.animation.ValueAnimator animator;
+        private final float[] phases = new float[]{0f, 1.7f, 3.2f, 4.8f};
+
+        AnimatedWaveDrawable(int color) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.FILL);
+            animator = android.animation.ValueAnimator.ofFloat(0f, (float) (Math.PI * 2));
+            animator.setDuration(920L);
+            animator.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            animator.setInterpolator(new android.view.animation.LinearInterpolator());
+            animator.addUpdateListener(value -> invalidateSelf());
+            animator.start();
+        }
+
+        @Override public void draw(Canvas canvas) {
+            RectF bounds = new RectF(getBounds());
+            if (bounds.isEmpty()) return;
+            float centerY = bounds.centerY();
+            float barWidth = Math.max(2f, bounds.width() * .13f);
+            float gap = Math.max(2f, bounds.width() * .08f);
+            float totalWidth = barWidth * 4f + gap * 3f;
+            float left = bounds.centerX() - totalWidth / 2f;
+            float time = animator.getAnimatedFraction() * (float) (Math.PI * 2);
+            for (int i = 0; i < 4; i++) {
+                float wave = (float) ((Math.sin(time * 1.35f + phases[i]) + 1f) * .5f);
+                float height = bounds.height() * (.28f + wave * .48f);
+                float top = centerY - height / 2f;
+                canvas.drawRoundRect(left, top, left + barWidth, top + height,
+                        barWidth / 2f, barWidth / 2f, paint);
+                left += barWidth + gap;
+            }
+        }
+
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
+        @Override public void setColorFilter(android.graphics.ColorFilter filter) { paint.setColorFilter(filter); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        @Override protected void onBoundsChange(android.graphics.Rect bounds) { invalidateSelf(); }
+        void stop() { animator.cancel(); invalidateSelf(); }
     }
 
     private void addExpandedActions(LinearLayout parent) {
@@ -900,6 +969,8 @@ public class OverlayService extends Service {
         artwork = null;
         musicInfoContainer = null;
         renderedArtwork = null;
+        if (playingDrawable != null) playingDrawable.stop();
+        playingDrawable = null;
         playButton = null;
         windowParams = null;
         lastTrackValue = null;

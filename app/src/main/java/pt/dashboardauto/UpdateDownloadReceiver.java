@@ -1,18 +1,16 @@
 package pt.dashboardauto;
 
 import android.app.DownloadManager;
-import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageInstaller;
 import android.net.Uri;
+import androidx.core.content.FileProvider;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 
-/** Moves a completed update into cache, installs it, and removes all temporary data. */
+/** Moves a completed update into private cache and opens Android's installer UI. */
 public final class UpdateDownloadReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
@@ -58,10 +56,12 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         try {
             if (!directory.exists() && !directory.mkdirs()) throw new IOException("Cannot create update cache");
             copyToCache(context, apkUri, temporaryApk);
-            // Remove the DownloadManager entry and its external-files payload now that
-            // the APK is in the private cache and the PackageInstaller owns the stream.
+            // Keep the private temporary file alive while the system installer reads it.
+            // It is removed on the next download, so the update never becomes permanent
+            // user storage.
+            openSystemInstaller(context, temporaryApk);
             manager.remove(id);
-            installFromCache(context, temporaryApk);
+            UpdateChecker.clearPendingDownload(context);
         } catch (Exception ignored) {
             temporaryApk.delete();
             UpdateChecker.clearPendingDownload(context);
@@ -85,32 +85,25 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void installFromCache(Context context, File apk) throws IOException {
-        PackageInstaller installer = context.getPackageManager().getPackageInstaller();
-        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-        params.setAppPackageName(context.getPackageName());
-        int sessionId = installer.createSession(params);
-        PackageInstaller.Session session = installer.openSession(sessionId);
+    private static void openSystemInstaller(Context context, File apk) throws IOException {
+        Uri apkUri;
         try {
-            try (FileInputStream input = new FileInputStream(apk);
-                 java.io.OutputStream output = session.openWrite("base.apk", 0, apk.length())) {
-                byte[] buffer = new byte[32 * 1024];
-                int count;
-                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-                session.fsync(output);
-            }
-            Intent callback = new Intent(context, UpdateDownloadReceiver.class)
-                    .setAction(UpdateChecker.UPDATE_INSTALL_COMPLETE_ACTION)
-                    .putExtra("temp_apk_path", apk.getAbsolutePath());
-            PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                    context, sessionId, callback,
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            session.commit(pendingIntent.getIntentSender());
-        } catch (Exception exception) {
-            try { session.abandon(); } catch (RuntimeException ignored) { }
-            throw exception;
-        } finally {
-            session.close();
+            apkUri = FileProvider.getUriForFile(
+                    context,
+                    context.getPackageName() + ".fileprovider",
+                    apk);
+        } catch (IllegalArgumentException exception) {
+            throw new IOException("Cannot expose update APK", exception);
+        }
+        Intent install = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(apkUri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            context.startActivity(install);
+        } catch (RuntimeException exception) {
+            throw new IOException("Android installer is unavailable", exception);
         }
     }
 }

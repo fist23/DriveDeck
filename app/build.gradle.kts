@@ -14,8 +14,8 @@ android {
         applicationId = "pt.dashboardauto"
         minSdk = 26
         targetSdk = 35
-        versionCode = 42
-        versionName = "0.9.25"
+        versionCode = 43
+        versionName = "0.9.26"
     }
     buildFeatures {
         compose = true
@@ -54,6 +54,7 @@ kotlin {
 }
 
 dependencies {
+    implementation("androidx.core:core:1.18.0")
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
