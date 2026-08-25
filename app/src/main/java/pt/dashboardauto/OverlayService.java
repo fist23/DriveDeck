@@ -144,14 +144,14 @@ public class OverlayService extends Service {
         content.setClipChildren(false);
         content.setOrientation(!expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER);
-        content.setPadding(dp(8), dp(4), dp(8), dp(4));
+        content.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 4 : 3), dp(expanded ? 8 : 4), dp(expanded ? 4 : 3));
         content.setBackground(panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
         musicInfoContainer = mediaContainer;
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
-        mediaInfo.setPadding(dp(expanded ? 8 : 6), dp(expanded ? 8 : 5), dp(expanded ? 10 : 8), dp(expanded ? 8 : 5));
+        mediaInfo.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 8 : 3), dp(expanded ? 10 : 4), dp(expanded ? 8 : 3));
         mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
         mediaInfo.setOnClickListener(v -> {
             if (!expanded) toggleExpanded();
@@ -160,7 +160,7 @@ public class OverlayService extends Service {
         artwork = new ImageView(this);
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.setBackgroundColor(Color.rgb(65, 27, 40));
-        int artworkSize = controlDp(expanded ? 58 : 44);
+        int artworkSize = controlDp(expanded ? 58 : 28);
         mediaInfo.addView(artwork, new LinearLayout.LayoutParams(artworkSize, artworkSize));
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
@@ -211,6 +211,10 @@ public class OverlayService extends Service {
             });
             labels.addView(progressBar, new LinearLayout.LayoutParams(-1, dp(24)));
         }
+        // In compact mode the island behaves like an iPhone Dynamic Island:
+        // artwork and the expand affordance remain visible, while metadata is
+        // revealed only after the user opens the player.
+        labels.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
         mediaInfo.addView(labels, new LinearLayout.LayoutParams(0, -1, 1f));
         ImageButton expandButton = actionButton(expanded ? R.drawable.ic_collapse : R.drawable.ic_expand, expanded ? "Recolher player" : "Expandir player", true);
         expandButton.setOnClickListener(v -> {
@@ -223,15 +227,15 @@ public class OverlayService extends Service {
                 : "Dynamic Island do DriveDeck. Toque para expandir");
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(32));
-        int compactActionWidth = controlDp(54) + dp(4);
+        int compactActionWidth = controlDp(42) + dp(4);
         int compactAvailableWidth = Math.max(dp(1), availableWidth - compactActionWidth);
-        int mediaWidth = !expanded ? Math.min(dp(300), compactAvailableWidth) : Math.min(dp(480), availableWidth);
-        int minimumMediaWidth = Math.min(dp(expanded ? 280 : 150), expanded ? availableWidth : compactAvailableWidth);
-        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 102 : 58)));
+        int mediaWidth = !expanded ? Math.min(dp(84), compactAvailableWidth) : Math.min(dp(480), availableWidth);
+        int minimumMediaWidth = Math.min(dp(expanded ? 280 : 78), expanded ? availableWidth : compactAvailableWidth);
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 102 : 46)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 84 : 54)));
+        content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 84 : 46)));
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next, R.drawable.ic_home};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte", "Abrir Dashboard"};
         for (int i = 0; i < icons.length; i++) {
@@ -262,6 +266,9 @@ public class OverlayService extends Service {
         content.setScaleX(requestedScale);
         content.setScaleY(requestedScale);
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
         // Dynamic Island: posição fixa e centrada no topo. Não há resize nem
         // drag para impedir que o gesto de condução roube toques aos botões.
         applyIslandPosition(params);
@@ -368,8 +375,8 @@ public class OverlayService extends Service {
 
     private GradientDrawable mediaBackground() {
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(31, 31, 39));
-        background.setCornerRadius(dp(14));
+        background.setColor(expanded ? Color.rgb(31, 31, 39) : Color.rgb(12, 13, 17));
+        background.setCornerRadius(dp(expanded ? 14 : 24));
         return background;
     }
 
@@ -544,7 +551,7 @@ public class OverlayService extends Service {
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        int size = controlDp(expanded ? 72 : 54);
+        int size = controlDp(expanded ? 72 : 42);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         int margin = controlDp(expanded ? 5 : 2);
         params.setMargins(margin, margin, margin, margin);
@@ -701,12 +708,9 @@ public class OverlayService extends Service {
     private int topIslandY() {
         int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
         int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
-        int cutoutInset = 0;
-        if (android.os.Build.VERSION.SDK_INT >= 28 && overlay != null && overlay.getRootWindowInsets() != null
-                && overlay.getRootWindowInsets().getDisplayCutout() != null) {
-            cutoutInset = overlay.getRootWindowInsets().getDisplayCutout().getSafeInsetTop();
-        }
-        if (isCenterIslandPosition() && cutoutInset > 0) return cutoutAlignedY();
+        android.view.DisplayCutout cutout = displayCutout();
+        int cutoutInset = cutout == null ? 0 : cutout.getSafeInsetTop();
+        if (isCenterIslandPosition() && cutout != null && !cutout.getBoundingRects().isEmpty()) return cutoutAlignedY();
         return Math.max(statusBarHeight, cutoutInset) + dp(8);
     }
 
@@ -716,18 +720,28 @@ public class OverlayService extends Service {
     }
 
     private int cutoutAlignedY() {
-        if (android.os.Build.VERSION.SDK_INT < 28 || overlay == null || overlay.getRootWindowInsets() == null) {
-            return dp(8);
-        }
         android.graphics.Rect selected = centralCutout();
         if (selected == null) return dp(8);
-        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight : Math.max(dp(48), overlay.getHeight());
+        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight
+                : Math.max(dp(48), overlay == null ? 0 : overlay.getHeight());
         return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
     }
 
+    private android.view.DisplayCutout displayCutout() {
+        if (android.os.Build.VERSION.SDK_INT < 28) return null;
+        if (android.os.Build.VERSION.SDK_INT >= 30 && manager != null) {
+            android.view.WindowMetrics metrics = manager.getMaximumWindowMetrics();
+            android.view.WindowInsets insets = metrics.getWindowInsets();
+            if (insets.getDisplayCutout() != null) return insets.getDisplayCutout();
+        }
+        if (overlay != null && overlay.getRootWindowInsets() != null) {
+            return overlay.getRootWindowInsets().getDisplayCutout();
+        }
+        return null;
+    }
+
     private android.graphics.Rect centralCutout() {
-        if (android.os.Build.VERSION.SDK_INT < 28 || overlay == null || overlay.getRootWindowInsets() == null) return null;
-        android.view.DisplayCutout cutout = overlay.getRootWindowInsets().getDisplayCutout();
+        android.view.DisplayCutout cutout = displayCutout();
         if (cutout == null || cutout.getBoundingRects().isEmpty()) return null;
         int screenCenter = getResources().getDisplayMetrics().widthPixels / 2;
         android.graphics.Rect selected = null;
@@ -1018,7 +1032,7 @@ public class OverlayService extends Service {
     }
 
     private LinearLayout.LayoutParams mediaButtonParams() {
-        int size = controlDp(expanded ? 64 : 52);
+        int size = controlDp(expanded ? 64 : 36);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         params.setMargins(dp(3), dp(3), dp(3), dp(3));
         return params;
