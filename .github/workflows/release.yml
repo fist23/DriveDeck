@@ -83,7 +83,9 @@ jobs:
           DRIVEDECK_KEYSTORE_PATH: ${{ runner.temp }}/drivedeck-release.jks
           DRIVEDECK_KEY_ALIAS: ${{ secrets.DRIVEDECK_KEY_ALIAS }}
           DRIVEDECK_STORE_PASSWORD: ${{ secrets.DRIVEDECK_STORE_PASSWORD }}
-          DRIVEDECK_KEY_PASSWORD: ${{ secrets.DRIVEDECK_KEY_PASSWORD }}
+          # The stable keystore is PKCS12, so Android requires the key password
+          # to match the store password during signing.
+          DRIVEDECK_KEY_PASSWORD: ${{ secrets.DRIVEDECK_STORE_PASSWORD }}
         run: gradle :app:assembleRelease
 
       - name: Verify APK signature

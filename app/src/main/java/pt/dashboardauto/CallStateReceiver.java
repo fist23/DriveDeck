@@ -15,6 +15,7 @@ public class CallStateReceiver extends BroadcastReceiver {
         if (!PermissionManager.canReadPhoneState(context)) return;
         android.content.SharedPreferences preferences = context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE);
         if (!preferences.getBoolean("return_navigation_during_call", true)) return;
+        if (CarModeLauncher.isAndroidAutoActive(context)) return;
         // Não interferir no ecrã de chamadas fora do contexto de condução.
         // A verificação é repetida dentro do atraso para cobrir desligamentos
         // Bluetooth que aconteçam enquanto o sistema ainda está a abrir a chamada.

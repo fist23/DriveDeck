@@ -135,16 +135,16 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun startCarMode() {
-        if (prefs.getBoolean("navigation_split_player", false)) {
-            try {
-                startActivity(Intent(this, CarDashboardActivity::class.java))
-            } catch (_: RuntimeException) {
-                Toast.makeText(this, "Não foi possível abrir o dashboard de condução.", Toast.LENGTH_LONG).show()
-            }
-            return
-        }
         if (!PermissionManager.canDrawOverlay(this)) {
             PermissionManager.openOverlaySettings(this)
+            return
+        }
+        if (prefs.getBoolean("navigation_split_player", false)) {
+            try {
+                startActivity(Intent(this, SplitPlayerActivity::class.java))
+            } catch (_: RuntimeException) {
+                Toast.makeText(this, "Não foi possível abrir o modo dividido.", Toast.LENGTH_LONG).show()
+            }
             return
         }
         val service = Intent(this, OverlayService::class.java).putExtra("launch_apps", true).putExtra("launch_mode", "car_mode")
@@ -153,11 +153,6 @@ class ComposeMainActivity : ComponentActivity() {
         } catch (_: RuntimeException) {
             Toast.makeText(this, "Não foi possível iniciar o Car Mode.", Toast.LENGTH_LONG).show()
         }
-    }
-
-    private fun applyPlayerOrientation(value: String) {
-        prefs.edit().putString("overlay_orientation", value).apply()
-        rebuildOverlay()
     }
 
     private fun applyAccent(value: String) {
@@ -394,8 +389,6 @@ class ComposeMainActivity : ComponentActivity() {
         var autoBluetooth by remember { mutableStateOf(prefs.getBoolean("auto_bluetooth", false)) }
         var closeOnDisconnect by remember { mutableStateOf(prefs.getBoolean("close_on_bluetooth_disconnect", true)) }
         var pauseOnDisconnect by remember { mutableStateOf(prefs.getBoolean("pause_music_on_bluetooth_disconnect", false)) }
-        var expandedByDefault by remember { mutableStateOf(prefs.getBoolean("overlay_expanded", false)) }
-        var playerOrientation by remember { mutableStateOf(prefs.getString("overlay_orientation", "auto") ?: "auto") }
         var controlSize by remember { mutableStateOf(prefs.getString("overlay_control_size", "normal") ?: "normal") }
         var returnNavigationDuringCall by remember { mutableStateOf(prefs.getBoolean("return_navigation_during_call", true)) }
         val selectedBluetoothAvailable = bluetoothAddress.isNotBlank() && bluetooth.any { it.address == bluetoothAddress }
@@ -437,12 +430,12 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                 }
                 SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
-                SettingsRow(Icons.Rounded.Home, "Dashboard próprio: mapa + player", compactNavigationPlayer) {
+                SettingsRow(Icons.Rounded.Home, "Split-screen: navegação + player", compactNavigationPlayer) {
                     compactNavigationPlayer = !compactNavigationPlayer
                     prefs.edit().putBoolean("navigation_split_player", compactNavigationPlayer).apply()
                 }
                 Text(
-                    "Usa mapa e player no mesmo ecrã, sem overlay nem split screen do Android.",
+                    "Tenta dividir o ecrã: navegação maior e player numa área menor ajustável.",
                     color = Color(0xFFAAAAB4),
                     style = MaterialTheme.typography.bodySmall
                 )
@@ -454,21 +447,12 @@ class ComposeMainActivity : ComponentActivity() {
                     pauseOnDisconnect = !pauseOnDisconnect
                     prefs.edit().putBoolean("pause_music_on_bluetooth_disconnect", pauseOnDisconnect).apply()
                 }
-                SettingsRow(Icons.Rounded.KeyboardArrowDown, "Abrir player expandido", expandedByDefault) {
-                    expandedByDefault = !expandedByDefault
-                    prefs.edit().putBoolean("overlay_expanded", expandedByDefault).apply()
-                }
                 Text("Player", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                Text("Orientação do player", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                PlayerOrientationPicker(playerOrientation) {
-                    playerOrientation = it
-                    applyPlayerOrientation(it)
-                }
                 Text("Tamanho dos controlos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 ControlSizePicker(controlSize) {
                     controlSize = it
                     prefs.edit().putString("overlay_control_size", it).apply()
-                    applyPlayerOrientation(playerOrientation)
+                    rebuildOverlay()
                 }
                 Text("Chamadas e permissões", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 SettingsRow(Icons.Rounded.Place, "Voltar à navegação durante chamadas", returnNavigationDuringCall) {
@@ -502,7 +486,7 @@ class ComposeMainActivity : ComponentActivity() {
                 }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Rounded.Home, null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Repor posição e tamanho do player")
+                    Text("Repor Dynamic Island")
                 }
             }
         }
@@ -611,25 +595,6 @@ class ComposeMainActivity : ComponentActivity() {
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(text = { Text("Abrir Car Mode completo") }, onClick = { onChange("car_mode"); expanded = false })
             DropdownMenuItem(text = { Text("Iniciar apenas a música") }, onClick = { onChange("music_only"); expanded = false })
-        }
-    }
-
-    @Composable
-    private fun PlayerOrientationPicker(value: String, onChange: (String) -> Unit) {
-        var menuExpanded by remember { mutableStateOf(false) }
-        val label = when (value) {
-            "vertical" -> "Vertical — controlos em coluna"
-            "horizontal" -> "Horizontal — controlos em linha"
-            else -> "Automático — seguir orientação do ecrã"
-        }
-        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(label, modifier = Modifier.weight(1f))
-            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher orientação")
-        }
-        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-            DropdownMenuItem(text = { Text("Automático — seguir orientação do ecrã") }, onClick = { onChange("auto"); menuExpanded = false })
-            DropdownMenuItem(text = { Text("Vertical — controlos em coluna") }, onClick = { onChange("vertical"); menuExpanded = false })
-            DropdownMenuItem(text = { Text("Horizontal — controlos em linha") }, onClick = { onChange("horizontal"); menuExpanded = false })
         }
     }
 

@@ -83,14 +83,23 @@ public final class SplitPlayerActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        // O serviço é usado pelo modo overlay/Bluetooth. No modo dividido a
+        // Activity do player substitui-o para não deixar dois players visíveis.
         stopService(new Intent(this, OverlayService.class));
         getWindow().setStatusBarColor(Color.rgb(10, 10, 14));
         getWindow().setNavigationBarColor(Color.rgb(10, 10, 14));
         setContentView(createContent());
-        handler.postDelayed(() -> {
-            if (getSharedPreferences("dashboard_auto", MODE_PRIVATE).getBoolean("auto_play_music_on_car_mode", true)) MusicController.playWhenReady(this);
-            openNavigationAdjacent();
-        }, 500L);
+        // Ao arrastar o divisor o Android pode recriar ou reconfigurar a
+        // Activity. Só abrir a navegação na primeira criação; fazê-lo de novo
+        // durante um resize repõe o split em 50/50.
+        if (state == null) {
+            handler.postDelayed(() -> {
+                if (getSharedPreferences("dashboard_auto", MODE_PRIVATE).getBoolean("auto_play_music_on_car_mode", true)) {
+                    MusicController.playWhenReady(this);
+                }
+                openNavigationAdjacent();
+            }, 500L);
+        }
     }
 
     private View createContent() {
@@ -101,6 +110,7 @@ public final class SplitPlayerActivity extends Activity {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(12), dp(10), dp(12), dp(10));
         panel.setBackground(panelBackground());
+
         heading = text("DriveDeck  •  Player", 16, Color.WHITE);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(42)));
@@ -149,7 +159,10 @@ public final class SplitPlayerActivity extends Activity {
         ImageButton next = button(R.drawable.ic_skip_next, "Faixa seguinte");
         previous.setOnClickListener(v -> MusicController.previous(this));
         next.setOnClickListener(v -> MusicController.next(this));
-        playButton.setOnClickListener(v -> { MusicController.playPause(this); renderPlayer(); });
+        playButton.setOnClickListener(v -> {
+            MusicController.playPause(this);
+            renderPlayer();
+        });
         controls.addView(previous, controlParams());
         controls.addView(playButton, controlParams());
         controls.addView(next, controlParams());
@@ -264,9 +277,12 @@ public final class SplitPlayerActivity extends Activity {
     }
 
     private void startFallbackOverlay() {
-        getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putFloat("overlay_scale", .75f).putBoolean("overlay_expanded", false).apply();
+        android.content.SharedPreferences preferences = getSharedPreferences("dashboard_auto", MODE_PRIVATE);
+        preferences.edit().putFloat("overlay_scale", .75f).putBoolean("overlay_expanded", false).apply();
         Intent service = new Intent(this, OverlayService.class).putExtra("compact_fallback", true);
-        try { if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service); } catch (RuntimeException ignored) { }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
+        } catch (RuntimeException ignored) { }
         finish();
     }
 
@@ -296,21 +312,35 @@ public final class SplitPlayerActivity extends Activity {
         button.setPadding(dp(12), dp(12), dp(12), dp(12));
         return button;
     }
-    private LinearLayout.LayoutParams controlParams() { return new LinearLayout.LayoutParams(0, dp(68), 1f); }
+
+    private LinearLayout.LayoutParams controlParams() {
+        return new LinearLayout.LayoutParams(0, dp(68), 1f);
+    }
+
     private TextView text(String value, float size, int color) {
         TextView result = new TextView(this);
-        result.setText(value); result.setTextSize(size); result.setTextColor(color); result.setMaxLines(1);
-        result.setEllipsize(android.text.TextUtils.TruncateAt.END); return result;
+        result.setText(value);
+        result.setTextSize(size);
+        result.setTextColor(color);
+        result.setMaxLines(1);
+        result.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        return result;
     }
+
     private GradientDrawable panelBackground() {
-        GradientDrawable background = new GradientDrawable(); background.setColor(Color.rgb(18, 18, 23)); background.setCornerRadius(dp(18)); return background;
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(18, 18, 23));
+        background.setCornerRadius(dp(18));
+        return background;
     }
+
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
     private float dp(float value) { return value * getResources().getDisplayMetrics().density; }
     private String formatTime(long milliseconds) {
         long totalSeconds = Math.max(0L, milliseconds) / 1000L;
         return (totalSeconds / 60L) + ":" + (totalSeconds % 60L < 10 ? "0" : "") + (totalSeconds % 60L);
     }
+
     @Override protected void onResume() { super.onResume(); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
     @Override protected void onStart() {
