@@ -222,6 +222,9 @@ public class OverlayService extends Service {
         mediaContainer.setContentDescription(expanded
                 ? "Player expandido"
                 : "Dynamic Island do DriveDeck. Toque para expandir");
+        mediaContainer.setOnClickListener(v -> {
+            if (!expanded) toggleExpanded();
+        });
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
         int compactActionWidth = controlDp(42) + dp(4);
@@ -233,7 +236,11 @@ public class OverlayService extends Service {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46)));
+        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46));
+        if (!expanded && isCenterIslandPosition()) {
+            controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
+        }
+        content.addView(controls, controlsParams);
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte"};
         for (int i = 0; i < icons.length; i++) {
@@ -736,9 +743,19 @@ public class OverlayService extends Service {
     private int cutoutAlignedY() {
         android.graphics.Rect selected = centralCutout();
         if (selected == null) return dp(8);
-        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight
-                : Math.max(dp(48), overlay == null ? 0 : overlay.getHeight());
-        return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
+        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight : (expanded ? dp(180) : dp(42));
+        if (!expanded) {
+            // No modo compacto, os controlos ficam de cada lado do recorte.
+            // O vazio central deixa a câmara visível, como no Dynamic Island.
+            return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
+        }
+        return Math.max(selected.bottom + dp(4), dp(4));
+    }
+
+    private int cutoutGapWidth() {
+        android.graphics.Rect selected = centralCutout();
+        if (selected == null) return dp(16);
+        return Math.max(dp(18), Math.min(dp(96), selected.width() + dp(12)));
     }
 
     private android.view.DisplayCutout displayCutout() {
