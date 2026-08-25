@@ -45,7 +45,6 @@ public class OverlayService extends Service {
     private FrameLayout overlay;
     private TextView track;
     private TextView artist;
-    private TextView album;
     private TextView timeLabel;
     private ImageView artwork;
     private android.view.View musicInfoContainer;
@@ -172,9 +171,6 @@ public class OverlayService extends Service {
         artist = new TextView(this);
         artist.setTextColor(Color.rgb(166, 166, 178)); artist.setTextSize(expanded ? 12 : 10); artist.setMaxLines(1);
         artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        album = new TextView(this);
-        album.setTextColor(Color.rgb(128, 128, 140)); album.setTextSize(10); album.setMaxLines(1);
-        album.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(track, new LinearLayout.LayoutParams(-1, -2));
         labels.addView(artist, new LinearLayout.LayoutParams(-1, -2));
         if (!expanded) {
@@ -190,7 +186,6 @@ public class OverlayService extends Service {
             labels.addView(compactProgressBar, new LinearLayout.LayoutParams(-1, dp(3)));
         }
         if (expanded) {
-            labels.addView(album, new LinearLayout.LayoutParams(-1, -2));
             timeLabel = new TextView(this);
             timeLabel.setTextColor(Color.rgb(145, 145, 156));
             timeLabel.setTextSize(9);
@@ -216,28 +211,31 @@ public class OverlayService extends Service {
         // revealed only after the user opens the player.
         labels.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
         mediaInfo.addView(labels, new LinearLayout.LayoutParams(0, -1, 1f));
-        ImageButton expandButton = actionButton(expanded ? R.drawable.ic_collapse : R.drawable.ic_expand, expanded ? "Recolher player" : "Expandir player", true);
-        expandButton.setOnClickListener(v -> {
-            v.animate().rotationBy(expanded ? -180f : 180f).setDuration(180).start();
-            toggleExpanded();
-        });
-        mediaInfo.addView(expandButton, mediaButtonParams());
+        if (expanded) {
+            ImageButton expandButton = actionButton(R.drawable.ic_collapse, "Recolher player", true);
+            expandButton.setOnClickListener(v -> {
+                v.animate().rotationBy(-180f).setDuration(180).start();
+                toggleExpanded();
+            });
+            mediaInfo.addView(expandButton, mediaButtonParams());
+        }
         mediaContainer.setContentDescription(expanded
                 ? "Player expandido"
                 : "Dynamic Island do DriveDeck. Toque para expandir");
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
-        int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(32));
+        int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
         int compactActionWidth = controlDp(42) + dp(4);
         int compactAvailableWidth = Math.max(dp(1), availableWidth - compactActionWidth);
-        int mediaWidth = !expanded ? Math.min(dp(84), compactAvailableWidth) : Math.min(dp(480), availableWidth);
-        int minimumMediaWidth = Math.min(dp(expanded ? 280 : 78), expanded ? availableWidth : compactAvailableWidth);
-        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 102 : 46)));
+        int compactMediaWidth = controlDp(42);
+        int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(480), availableWidth);
+        int minimumMediaWidth = Math.min(dp(expanded ? 280 : 42), expanded ? availableWidth : compactAvailableWidth);
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 108 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 84 : 46)));
-        int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next, R.drawable.ic_home};
-        String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte", "Abrir Dashboard"};
+        content.addView(controls, new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46)));
+        int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next};
+        String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte"};
         for (int i = 0; i < icons.length; i++) {
             if (!expanded && i != 1) continue;
             ImageButton b = actionButton(icons[i], descriptions[i], i == 1 || i == icons.length - 1);
@@ -254,7 +252,7 @@ public class OverlayService extends Service {
             extra.setOrientation(LinearLayout.HORIZONTAL);
             extra.setGravity(Gravity.CENTER);
             addExpandedActions(extra);
-            content.addView(extra, new LinearLayout.LayoutParams(-2, controlDp(84)));
+            content.addView(extra, new LinearLayout.LayoutParams(-2, controlDp(58)));
         }
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
@@ -265,7 +263,15 @@ public class OverlayService extends Service {
         final float requestedScale = 1f;
         content.setScaleX(requestedScale);
         content.setScaleY(requestedScale);
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+        int overlayFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        if (isCenterIslandPosition()) {
+            // A Dynamic Island must occupy the display area behind the status
+            // bar/cutout. Without these flags Android repositions overlays
+            // below the safe inset, which makes the island visibly detached.
+            overlayFlags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+        }
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, overlayFlags, PixelFormat.TRANSLUCENT);
         if (android.os.Build.VERSION.SDK_INT >= 28) {
             params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         }
@@ -417,7 +423,6 @@ public class OverlayService extends Service {
                     ? "A tocar: " + parts[0] + (parts.length > 1 ? ", por " + parts[1] : "")
                     : "Sem música ativa. Toque para escolher áudio");
         }
-        if (album != null) album.setText(expanded ? MusicController.currentAlbum(this) : "");
         if (artwork != null) {
             Bitmap bitmap = MusicController.currentArtwork(this);
             if (bitmap != renderedArtwork || artwork.getDrawable() == null) {
@@ -541,17 +546,25 @@ public class OverlayService extends Service {
     private void addExpandedActions(LinearLayout parent) {
         ImageButton navigation = actionButton(R.drawable.ic_map, "Abrir navegação", false);
         navigation.setOnClickListener(v -> openConfigured("navigation_app"));
-        parent.addView(navigation, buttonParams());
+        parent.addView(navigation, secondaryButtonParams());
         ImageButton music = actionButton(R.drawable.ic_music, "Escolher app de áudio", false);
         music.setOnClickListener(v -> showAudioChooser());
-        parent.addView(music, buttonParams());
+        parent.addView(music, secondaryButtonParams());
         ImageButton close = actionButton(R.drawable.ic_close, "Opções para fechar", true);
         close.setOnClickListener(v -> showCloseOptions());
-        parent.addView(close, buttonParams());
+        parent.addView(close, secondaryButtonParams());
+    }
+
+    private LinearLayout.LayoutParams secondaryButtonParams() {
+        int size = controlDp(48);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
+        int margin = dp(4);
+        params.setMargins(margin, margin, margin, margin);
+        return params;
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        int size = controlDp(expanded ? 72 : 42);
+        int size = controlDp(expanded ? 64 : 42);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         int margin = controlDp(expanded ? 5 : 2);
         params.setMargins(margin, margin, margin, margin);
@@ -711,6 +724,7 @@ public class OverlayService extends Service {
         android.view.DisplayCutout cutout = displayCutout();
         int cutoutInset = cutout == null ? 0 : cutout.getSafeInsetTop();
         if (isCenterIslandPosition() && cutout != null && !cutout.getBoundingRects().isEmpty()) return cutoutAlignedY();
+        if (isCenterIslandPosition()) return 0;
         return Math.max(statusBarHeight, cutoutInset) + dp(8);
     }
 
@@ -862,7 +876,6 @@ public class OverlayService extends Service {
         overlay = null;
         track = null;
         artist = null;
-        album = null;
         timeLabel = null;
         progressBar = null;
         compactProgressBar = null;
@@ -1032,7 +1045,7 @@ public class OverlayService extends Service {
     }
 
     private LinearLayout.LayoutParams mediaButtonParams() {
-        int size = controlDp(expanded ? 64 : 36);
+        int size = controlDp(expanded ? 56 : 36);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         params.setMargins(dp(3), dp(3), dp(3), dp(3));
         return params;
