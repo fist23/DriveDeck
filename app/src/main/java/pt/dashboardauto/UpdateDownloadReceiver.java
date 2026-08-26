@@ -59,7 +59,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
             // Keep the private temporary file alive while the system installer reads it.
             // It is removed on the next download, so the update never becomes permanent
             // user storage.
-            openSystemInstaller(context, temporaryApk);
+            openSystemInstaller(context, temporaryApk, apkUri);
             manager.remove(id);
             UpdateChecker.clearPendingDownload(context);
         } catch (Exception ignored) {
@@ -85,7 +85,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void openSystemInstaller(Context context, File apk) throws IOException {
+    private static void openSystemInstaller(Context context, File apk, Uri downloadUri) throws IOException {
         Uri apkUri;
         try {
             apkUri = FileProvider.getUriForFile(
@@ -95,15 +95,26 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         } catch (IllegalArgumentException exception) {
             throw new IOException("Cannot expose update APK", exception);
         }
-        Intent install = new Intent(Intent.ACTION_VIEW)
+        Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE)
                 .setDataAndType(apkUri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        install.setClipData(android.content.ClipData.newRawUri("DriveDeck update", apkUri));
         try {
             context.startActivity(install);
         } catch (RuntimeException exception) {
-            throw new IOException("Android installer is unavailable", exception);
+            // Some Android builds expose the package installer only for ACTION_VIEW.
+            Intent fallback = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(downloadUri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            fallback.setClipData(android.content.ClipData.newRawUri("DriveDeck update", downloadUri));
+            try {
+                context.startActivity(fallback);
+            } catch (RuntimeException fallbackException) {
+                throw new IOException("Android installer is unavailable", fallbackException);
+            }
         }
     }
 }
