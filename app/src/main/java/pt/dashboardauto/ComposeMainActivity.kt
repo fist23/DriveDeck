@@ -301,6 +301,7 @@ class ComposeMainActivity : ComponentActivity() {
                 PermissionButton("Notificações", PermissionManager.canPostNotifications(this@ComposeMainActivity)) { PermissionManager.requestNotifications(this@ComposeMainActivity) }
                 PermissionButton("Bluetooth", PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) { PermissionManager.requestBluetooth(this@ComposeMainActivity) }
                 PermissionButton("Estado do telefone", PermissionManager.canReadPhoneState(this@ComposeMainActivity)) { PermissionManager.requestPhoneState(this@ComposeMainActivity) }
+                PermissionButton("Fotos dos contactos", PermissionManager.canReadContacts(this@ComposeMainActivity)) { PermissionManager.requestContacts(this@ComposeMainActivity) }
                 PermissionButton("Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
                 PermissionButton("Overlay sobre outras apps", PermissionManager.canDrawOverlay(this@ComposeMainActivity)) { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }
                 OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
@@ -400,7 +401,11 @@ class ComposeMainActivity : ComponentActivity() {
             if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) add("autorizar Bluetooth")
         }
         val setupReady = missingSetup.isEmpty()
-        val setupSubtitle = if (setupReady) "Apps, Bluetooth e overlay configurados" else "Falta: " + missingSetup.joinToString(", ")
+        val setupSubtitle = if (setupReady) {
+            "Apps, Bluetooth e overlay configurados"
+        } else {
+            "Falta: " + missingSetup.joinToString(", ")
+        }
         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Definições", color = Color.White, style = MaterialTheme.typography.titleLarge)
@@ -409,12 +414,24 @@ class ComposeMainActivity : ComponentActivity() {
                     color = Color(0xFF777780),
                     style = MaterialTheme.typography.labelSmall
                 )
-                Card(colors = CardDefaults.cardColors(containerColor = if (setupReady) Color(0xFF123522) else Color(0xFF382B1A)), modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = if (setupReady) Color(0xFF123522) else Color(0xFF382B1A)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (setupReady) Icons.Rounded.Check else Icons.Rounded.Settings, null, tint = if (setupReady) Color(0xFF30D158) else Color(0xFFFFB340), modifier = Modifier.size(24.dp))
+                        Icon(
+                            if (setupReady) Icons.Rounded.Check else Icons.Rounded.Settings,
+                            contentDescription = null,
+                            tint = if (setupReady) Color(0xFF30D158) else Color(0xFFFFB340),
+                            modifier = Modifier.size(24.dp)
+                        )
                         Column(Modifier.padding(start = 10.dp)) {
                             Text(if (setupReady) "Tudo pronto para conduzir" else "Configuração incompleta", color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text(setupSubtitle, color = Color(0xFFCACAD2), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                setupSubtitle,
+                                color = Color(0xFFCACAD2),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -428,6 +445,7 @@ class ComposeMainActivity : ComponentActivity() {
                     }
                     Text("DriveDeck ${info.version} pronta para descarregar", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
                 }
+                Text("Apps e ligação ao carro", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 AppPicker("Navegação", apps, navigation, onNavigation, AppCategory.NAVIGATION)
                 AppPicker("Música", apps, music, onMusic, AppCategory.MUSIC)
                 BluetoothPicker(bluetooth, bluetoothAddress, onBluetooth)
@@ -438,75 +456,44 @@ class ComposeMainActivity : ComponentActivity() {
                 AnimatedVisibility(automationOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         AudioFavoritesPicker(apps)
-                SettingsRow(Icons.Rounded.Notifications, "Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
-                SettingsRow(Icons.Rounded.Place, "Bluetooth automático", autoBluetooth && selectedBluetoothAvailable) {
-                    if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) {
-                        PermissionManager.requestBluetooth(this@ComposeMainActivity)
-                    } else if (bluetoothAddress.isBlank()) {
-                        Toast.makeText(this@ComposeMainActivity, "Escolhe primeiro o Bluetooth do carro.", Toast.LENGTH_SHORT).show()
-                    } else {
-                        autoBluetooth = !autoBluetooth
-                        prefs.edit().putBoolean("auto_bluetooth", autoBluetooth).apply()
-                    }
-                }
-                SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
-                SettingsRow(Icons.Rounded.Close, "Fechar ao desligar Bluetooth", closeOnDisconnect) {
-                    closeOnDisconnect = !closeOnDisconnect
-                    prefs.edit().putBoolean("close_on_bluetooth_disconnect", closeOnDisconnect).apply()
-                }
-                SettingsRow(Icons.Rounded.PlayArrow, "Pausar música ao desligar Bluetooth", pauseOnDisconnect) {
-                    pauseOnDisconnect = !pauseOnDisconnect
-                    prefs.edit().putBoolean("pause_music_on_bluetooth_disconnect", pauseOnDisconnect).apply()
-                }
+                        SettingsRow(Icons.Rounded.Notifications, "Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
+                        SettingsRow(Icons.Rounded.Place, "Bluetooth automático", autoBluetooth && selectedBluetoothAvailable) {
+                            if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) PermissionManager.requestBluetooth(this@ComposeMainActivity)
+                            else if (bluetoothAddress.isBlank()) Toast.makeText(this@ComposeMainActivity, "Escolhe primeiro o Bluetooth do carro.", Toast.LENGTH_SHORT).show()
+                            else { autoBluetooth = !autoBluetooth; prefs.edit().putBoolean("auto_bluetooth", autoBluetooth).apply() }
+                        }
+                        SettingsRow(Icons.Rounded.PlayArrow, "Reproduzir música ao abrir", autoplay) { autoplay = !autoplay; prefs.edit().putBoolean("auto_play_music_on_car_mode", autoplay).apply() }
+                        SettingsRow(Icons.Rounded.Close, "Fechar ao desligar Bluetooth", closeOnDisconnect) { closeOnDisconnect = !closeOnDisconnect; prefs.edit().putBoolean("close_on_bluetooth_disconnect", closeOnDisconnect).apply() }
+                        SettingsRow(Icons.Rounded.PlayArrow, "Pausar música ao desligar Bluetooth", pauseOnDisconnect) { pauseOnDisconnect = !pauseOnDisconnect; prefs.edit().putBoolean("pause_music_on_bluetooth_disconnect", pauseOnDisconnect).apply() }
                     }
                 }
                 SettingsSectionHeader("Player", "Posição, tamanho e aparência", playerOpen) { playerOpen = !playerOpen }
                 AnimatedVisibility(playerOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Posição da Dynamic Island", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                IslandPositionPicker(islandPosition) {
-                    islandPosition = it
-                    prefs.edit().putString("overlay_position", it).apply()
-                    rebuildOverlay()
-                }
-                Text("Tamanho dos controlos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                ControlSizePicker(controlSize) {
-                    controlSize = it
-                    prefs.edit().putString("overlay_control_size", it).apply()
-                    rebuildOverlay()
-                }
+                        Text("Posição da Dynamic Island", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        IslandPositionPicker(islandPosition) { islandPosition = it; prefs.edit().putString("overlay_position", it).apply(); rebuildOverlay() }
+                        Text("Tamanho dos controlos", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        ControlSizePicker(controlSize) { controlSize = it; prefs.edit().putString("overlay_control_size", it).apply(); rebuildOverlay() }
                     }
                 }
                 SettingsSectionHeader("Chamadas e permissões", "Acesso ao telefone, contactos e assistente", callsOpen) { callsOpen = !callsOpen }
                 AnimatedVisibility(callsOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SettingsRow(Icons.Rounded.Place, "Voltar à navegação durante chamadas", returnNavigationDuringCall) {
-                    if (!PermissionManager.canReadPhoneState(this@ComposeMainActivity)) {
-                        PermissionManager.requestPhoneState(this@ComposeMainActivity)
-                    } else {
-                        returnNavigationDuringCall = !returnNavigationDuringCall
-                        prefs.edit().putBoolean("return_navigation_during_call", returnNavigationDuringCall).apply()
-                    }
-                }
-                Text("Ao ligar Bluetooth", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                ModePicker(bluetoothMode) { bluetoothMode = it; prefs.edit().putString("bluetooth_launch_mode", it).apply() }
-                OutlinedButton(onClick = { PermissionManager.requestNotifications(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (PermissionManager.canPostNotifications(this@ComposeMainActivity)) "✓ Notificações autorizadas" else "Permitir notificações")
-                }
-                OutlinedButton(onClick = { PermissionManager.requestPhoneState(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (PermissionManager.canReadPhoneState(this@ComposeMainActivity)) "✓ Chamadas autorizadas" else "Permitir retoma da navegação em chamadas")
-                }
-                OutlinedButton(onClick = { PermissionManager.requestContacts(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (PermissionManager.canReadContacts(this@ComposeMainActivity)) "✓ Fotos dos contactos autorizadas" else "Permitir fotos dos contactos")
-                }
-                OutlinedButton(onClick = { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (PermissionManager.canDrawOverlay(this@ComposeMainActivity)) "✓ Overlay autorizado · Gerir" else "Permitir overlay sobre outras apps")
-                }
-                OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
+                        SettingsRow(Icons.Rounded.Place, "Voltar à navegação durante chamadas", returnNavigationDuringCall) {
+                            if (!PermissionManager.canReadPhoneState(this@ComposeMainActivity)) PermissionManager.requestPhoneState(this@ComposeMainActivity)
+                            else { returnNavigationDuringCall = !returnNavigationDuringCall; prefs.edit().putBoolean("return_navigation_during_call", returnNavigationDuringCall).apply() }
+                        }
+                        Text("Ao ligar Bluetooth", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        ModePicker(bluetoothMode) { bluetoothMode = it; prefs.edit().putString("bluetooth_launch_mode", it).apply() }
+                        OutlinedButton(onClick = { PermissionManager.requestNotifications(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canPostNotifications(this@ComposeMainActivity)) "✓ Notificações autorizadas" else "Permitir notificações") }
+                        OutlinedButton(onClick = { PermissionManager.requestPhoneState(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canReadPhoneState(this@ComposeMainActivity)) "✓ Chamadas autorizadas" else "Permitir retoma da navegação em chamadas") }
+                        OutlinedButton(onClick = { PermissionManager.requestContacts(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canReadContacts(this@ComposeMainActivity)) "✓ Fotos dos contactos autorizadas" else "Permitir fotos dos contactos") }
+                        OutlinedButton(onClick = { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canDrawOverlay(this@ComposeMainActivity)) "✓ Overlay autorizado · Gerir" else "Permitir overlay sobre outras apps") }
+                        OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
                     }
                 }
                 OutlinedButton(onClick = {
-                    prefs.edit().remove("overlay_x").remove("overlay_y").remove("overlay_scale").apply()
+                    prefs.edit().remove("overlay_x").remove("overlay_y").apply()
                     val resetIntent = Intent(this@ComposeMainActivity, OverlayService::class.java)
                         .setAction("pt.dashboardauto.action.RESET_LAYOUT")
                     try {
@@ -722,13 +709,24 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     private fun SettingsSectionHeader(title: String, subtitle: String, expanded: Boolean, onClick: () -> Unit) {
-        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF252530)), modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF252530)),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(Modifier.weight(1f)) {
                     Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(subtitle, color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodySmall)
                 }
-                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = if (expanded) "Recolher" else "Abrir", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
+                Icon(
+                    Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Recolher" else "Abrir",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f }
+                )
             }
         }
     }

@@ -21,8 +21,6 @@ import android.content.res.ColorStateList;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.MotionEvent;
-import android.view.VelocityTracker;
-import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
@@ -39,9 +37,8 @@ public class OverlayService extends Service {
     private static volatile boolean active;
     // Permite compactar o player para libertar espaço, mantendo sempre os
     // controlos utilizáveis durante a condução.
-    private static final float MIN_OVERLAY_SCALE = .70f;
-    private static final float MAX_OVERLAY_SCALE = 1.25f;
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
+    public static final String ACTION_CALL_STATE = "pt.dashboardauto.action.CALL_STATE";
     public static final String ACTION_CLOSE_EVERYTHING = "pt.dashboardauto.action.CLOSE_EVERYTHING";
     private static final String ACTION_RESET_LAYOUT = "pt.dashboardauto.action.RESET_LAYOUT";
     private static final String ACTION_REBUILD_LAYOUT = "pt.dashboardauto.action.REBUILD_LAYOUT";
@@ -55,18 +52,28 @@ public class OverlayService extends Service {
     private Bitmap renderedArtwork;
     private ImageButton playButton;
     private AnimatedWaveDrawable playingDrawable;
-    private ImageButton resizeHandle;
     private SeekBar progressBar;
     private android.widget.ProgressBar compactProgressBar;
     private long durationMs;
     private boolean userSeeking;
-    private TextView dropZone;
-    private WindowManager.LayoutParams dropZoneParams;
-    private boolean dropZoneTop;
     private boolean playingState;
     private String lastTrackValue;
     private String pendingTrackValue;
     private boolean trackTransitionRunning;
+    private int trackAnimationToken;
+    private boolean callActive;
+    private long callStartedAt;
+    private String callNumber = "";
+    private TextView callName;
+    private TextView callDuration;
+    private ImageView callArtwork;
+    private final Runnable callTicker = new Runnable() {
+        @Override public void run() {
+            if (!callActive) return;
+            updateCallUi();
+            refreshHandler.postDelayed(this, 1000L);
+        }
+    };
     private long optimisticPlaybackUntil;
     private boolean expanded;
     private boolean miniPlayerHidden;
@@ -74,20 +81,6 @@ public class OverlayService extends Service {
     private android.view.View playerContent;
     private int baseOverlayWidth;
     private int baseOverlayHeight;
-    private float downX, downY;
-    private int startX, startY;
-    private boolean dragMoved;
-    private boolean dragActive;
-    private boolean dropZoneActive;
-    private VelocityTracker dragVelocity;
-    private int dragTouchSlop;
-    private int pendingDragX;
-    private int pendingDragY;
-    private boolean dragFramePosted;
-    private int dragGestureId;
-    private float pendingResizeScale = 1f;
-    private boolean resizeFramePosted;
-    private int resizeGestureId;
     private boolean layoutTransitionRunning;
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable refreshTrack = new Runnable() {
@@ -107,7 +100,6 @@ public class OverlayService extends Service {
                 .putBoolean("overlay_expanded", false)
                 .remove("overlay_x")
                 .remove("overlay_y")
-                .remove("overlay_scale")
                 .apply();
         createNotification();
         if (PermissionManager.canDrawOverlay(this)) addOverlay();
@@ -117,6 +109,23 @@ public class OverlayService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_CLOSE_EVERYTHING.equals(intent.getAction())) {
             closeEverything();
+            return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_CALL_STATE.equals(intent.getAction())) {
+            boolean activeCall = intent.getBooleanExtra("call_active", false);
+            if (activeCall && !callActive) callStartedAt = android.os.SystemClock.elapsedRealtime();
+            if (activeCall) callNumber = intent.getStringExtra("call_number");
+            callActive = activeCall;
+            if (!callActive) {
+                callStartedAt = 0L;
+                callNumber = "";
+                refreshHandler.removeCallbacks(callTicker);
+            } else {
+                refreshHandler.removeCallbacks(callTicker);
+                refreshHandler.post(callTicker);
+            }
+            if (overlay != null) removeOverlay();
+            if (PermissionManager.canDrawOverlay(this)) addOverlay();
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_CLOSE_PLAYER.equals(intent.getAction())) {
@@ -156,7 +165,8 @@ public class OverlayService extends Service {
             }
         });
         content.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 4 : 3), dp(expanded ? 8 : 4), dp(expanded ? 4 : 3));
-        content.setBackground(panelBackground());
+        boolean compactIsland = !expanded;
+        content.setBackground(compactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
         musicInfoContainer = mediaContainer;
         LinearLayout mediaInfo = new LinearLayout(this);
@@ -169,25 +179,10 @@ public class OverlayService extends Service {
             else openConfigured("music_app");
         });
         mediaInfo.setClickable(true);
-        mediaInfo.setOnTouchListener((view, event) -> {
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                view.setPressed(true);
-                view.animate().scaleX(.985f).scaleY(.985f).setDuration(70).start();
-                return true;
-            }
-            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-                view.setPressed(false);
-                view.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
-                view.performClick();
-                return true;
-            }
-            if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                view.setPressed(false);
-                view.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
-                return true;
-            }
-            return true;
-        });
+        // Não consumir o MotionEvent aqui: o listener anterior interceptava a
+        // sequência de toque da pill e, em alguns dispositivos, impedia que o
+        // OnClick fosse entregue. O ripple/estado pressed nativo mantém o
+        // feedback visual sem roubar o gesto de expansão.
         artwork = new ImageView(this);
         artwork.setClickable(true);
         artwork.setOnClickListener(v -> mediaInfo.performClick());
@@ -259,6 +254,10 @@ public class OverlayService extends Service {
             });
             mediaInfo.addView(expandButton, mediaButtonParams());
         }
+        if (callActive) {
+            mediaInfo.removeAllViews();
+            addCallInfo(mediaInfo, expanded);
+        }
         mediaContainer.setContentDescription(expanded
                 ? "Player expandido"
                 : "Dynamic Island do DriveDeck. Toque para expandir");
@@ -267,15 +266,15 @@ public class OverlayService extends Service {
         });
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
-        int compactActionWidth = controlDp(42) + dp(4);
-        int compactAvailableWidth = Math.max(dp(1), availableWidth - compactActionWidth);
-        int compactMediaWidth = controlDp(42);
+        int compactAvailableWidth = availableWidth;
+        int compactMediaWidth = callActive ? dp(220) : controlDp(42);
         int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(480), availableWidth);
         int minimumMediaWidth = Math.min(dp(expanded ? 280 : 42), expanded ? availableWidth : compactAvailableWidth);
         content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 108 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
+        if (compactIsland) controls.setVisibility(android.view.View.GONE);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46));
         if (!expanded && isCenterIslandPosition()) {
             controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
@@ -284,7 +283,7 @@ public class OverlayService extends Service {
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte"};
         for (int i = 0; i < icons.length; i++) {
-            if (!expanded && i != 1) continue;
+            if (!expanded) continue;
             ImageButton b = actionButton(icons[i], descriptions[i], i == 1 || i == icons.length - 1);
             if (i == 1) {
                 playButton = b;
@@ -294,6 +293,7 @@ public class OverlayService extends Service {
             b.setOnClickListener(v -> handleAction(actionIndex));
             controls.addView(b, buttonParams());
         }
+        if (callActive && !expanded) controls.setVisibility(android.view.View.GONE);
         if (expanded) {
             LinearLayout extra = new LinearLayout(this);
             extra.setOrientation(LinearLayout.HORIZONTAL);
@@ -305,6 +305,24 @@ public class OverlayService extends Service {
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
         overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
         playerContent = content;
+        content.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                            oldLeft, oldTop, oldRight, oldBottom) -> {
+            int width = right - left;
+            int height = bottom - top;
+            if (width <= 0 || height <= 0 || windowParams == null || manager == null || overlay == null) return;
+            float scaleX = Math.abs(view.getScaleX());
+            float scaleY = Math.abs(view.getScaleY());
+            int windowWidth = Math.max(1, Math.round(width * (scaleX <= 0f ? 1f : scaleX)));
+            int windowHeight = Math.max(1, Math.round(height * (scaleY <= 0f ? 1f : scaleY)));
+            // O conteúdo é a fonte de verdade: qualquer mudança provocada por
+            // expansão, recolha ou animação atualiza imediatamente a caixa da
+            // janela para impedir clipping dos controlos.
+            if (windowParams.width == windowWidth && windowParams.height == windowHeight) return;
+            windowParams.width = windowWidth;
+            windowParams.height = windowHeight;
+            clampWindowBoundsToDisplay();
+            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+        });
         // A Dynamic Island has one stable size. Valores antigos de resize são
         // ignorados para que a atualização não herde uma escala incompatível.
         final float requestedScale = 1f;
@@ -346,6 +364,7 @@ public class OverlayService extends Service {
                 contentParams.width = baseOverlayWidth;
                 contentParams.height = baseOverlayHeight;
                 content.setLayoutParams(contentParams);
+                syncOuterBoundsToContent(content);
                 overlay.requestLayout();
                 overlay.post(() -> {
                     if (overlay != createdOverlay) return;
@@ -363,6 +382,7 @@ public class OverlayService extends Service {
                         stableParams.width = baseOverlayWidth;
                         stableParams.height = baseOverlayHeight;
                         content.setLayoutParams(stableParams);
+                        syncOuterBoundsToContent(content);
                         overlay.requestLayout();
                     }
                     float effectiveScale = 1f;
@@ -404,15 +424,58 @@ public class OverlayService extends Service {
         content.measure(unspecified, unspecified);
     }
 
+    /** Mantém os bounds da janela exatamente alinhados com o layout lógico. */
+    private void syncOuterBoundsToContent(android.view.View content) {
+        if (content == null || overlay == null) return;
+        int width = content.getMeasuredWidth();
+        int height = content.getMeasuredHeight();
+        if (width <= 0 || height <= 0) return;
+        baseOverlayWidth = width;
+        baseOverlayHeight = height;
+        android.view.ViewGroup.LayoutParams rawParams = content.getLayoutParams();
+        if (rawParams instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) rawParams;
+            if (params.width != width || params.height != height) {
+                params.width = width;
+                params.height = height;
+                content.setLayoutParams(params);
+            }
+        }
+        if (windowParams == null || manager == null) return;
+        float scaleX = Math.abs(content.getScaleX());
+        float scaleY = Math.abs(content.getScaleY());
+        windowParams.width = Math.max(1, Math.round(width * (scaleX <= 0f ? 1f : scaleX)));
+        windowParams.height = Math.max(1, Math.round(height * (scaleY <= 0f ? 1f : scaleY)));
+        clampWindowBoundsToDisplay();
+        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+    }
+
+    /** Mantém a janela inteira visível quando o conteúdo muda de tamanho. */
+    private void clampWindowBoundsToDisplay() {
+        if (windowParams == null) return;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int maxX = Math.max(0, screenWidth - Math.max(1, windowParams.width));
+        int maxY = Math.max(0, screenHeight - Math.max(1, windowParams.height));
+        boolean leftAnchored = (windowParams.gravity & Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.LEFT;
+        boolean rightAnchored = (windowParams.gravity & Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.RIGHT;
+        if (leftAnchored || rightAnchored) {
+            windowParams.x = Math.max(0, Math.min(windowParams.x, maxX));
+        }
+        windowParams.y = Math.max(0, Math.min(windowParams.y, maxY));
+    }
+
     private GradientDrawable panelBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
                     blendColor(accentColor(), Color.BLACK, .42f),
                     Color.rgb(18, 25, 58),
                     Color.rgb(7, 8, 17)})
-                : new GradientDrawable();
-        if (!expanded) background.setColor(Color.rgb(5, 6, 9));
-        background.setCornerRadius(dp(expanded ? 22 : 32));
+                : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
+                    Color.rgb(27, 29, 39),
+                    Color.rgb(7, 8, 13),
+                    Color.rgb(22, 24, 34)});
+        background.setCornerRadius(dp(expanded ? 22 : 100));
         background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
     }
@@ -427,9 +490,12 @@ public class OverlayService extends Service {
     }
 
     private GradientDrawable mediaBackground() {
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(expanded ? Color.rgb(31, 31, 39) : Color.rgb(12, 13, 17));
-        background.setCornerRadius(dp(expanded ? 14 : 24));
+        GradientDrawable background = expanded
+                ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
+                    Color.rgb(42, 42, 52), Color.rgb(22, 23, 31)})
+                : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
+                    Color.rgb(20, 22, 30), Color.rgb(8, 9, 14)});
+        background.setCornerRadius(dp(expanded ? 14 : 100));
         return background;
     }
 
@@ -457,6 +523,13 @@ public class OverlayService extends Service {
             compactProgressBar.setEnabled(durationMs > 0);
             compactProgressBar.setProgress(durationMs <= 0 ? 0 : (int) Math.min(1000L, playback.positionMs * 1000L / durationMs));
         }
+        updateCallUi();
+    }
+
+    private void updateCallUi() {
+        if (!callActive || callDuration == null) return;
+        long elapsed = Math.max(0L, android.os.SystemClock.elapsedRealtime() - callStartedAt) / 1000L;
+        callDuration.setText(String.format(java.util.Locale.US, "%02d:%02d", elapsed / 60L, elapsed % 60L));
     }
 
     private void renderTrack(String value) {
@@ -486,6 +559,10 @@ public class OverlayService extends Service {
         if (overlay == null || track == null || musicInfoContainer == null) return;
         if (trackTransitionRunning) {
             pendingTrackValue = value;
+            return;
+        }
+        if (!expanded) {
+            animateCompactTrackChange(value);
             return;
         }
         trackTransitionRunning = true;
@@ -536,6 +613,130 @@ public class OverlayService extends Service {
                 .start();
     }
 
+    private void animateCompactTrackChange(String value) {
+        if (!(musicInfoContainer instanceof FrameLayout) || track == null || artist == null) return;
+        trackTransitionRunning = true;
+        pendingTrackValue = null;
+        final int animationToken = ++trackAnimationToken;
+        FrameLayout transitionContainer = (FrameLayout) musicInfoContainer;
+        final int compactWidth = controlDp(42);
+        final int expandedWidth = Math.min(dp(230), Math.max(dp(150),
+                getResources().getDisplayMetrics().widthPixels - dp(96)));
+        final int compactOverlayWidth = playerContent != null && playerContent.getWidth() > 0
+                ? playerContent.getWidth()
+                : Math.max(compactWidth, baseOverlayWidth);
+        final android.view.ViewGroup.LayoutParams layoutParams = transitionContainer.getLayoutParams();
+        final int height = layoutParams.height > 0 ? layoutParams.height : controlDp(42);
+        android.view.ViewGroup.LayoutParams contentParams = playerContent == null
+                ? null : playerContent.getLayoutParams();
+        track.setVisibility(android.view.View.VISIBLE);
+        artist.setVisibility(android.view.View.VISIBLE);
+        track.setAlpha(0f);
+        artist.setAlpha(0f);
+        renderTrack(value);
+        if (artwork != null) {
+            artwork.animate().cancel();
+            artwork.setPivotX(artwork.getWidth());
+            artwork.setPivotY(artwork.getHeight() / 2f);
+            artwork.setScaleX(.78f);
+            artwork.setScaleY(.78f);
+            artwork.setAlpha(.35f);
+            artwork.setRotationY(-10f);
+            artwork.animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .alpha(1f)
+                    .rotationY(0f)
+                    .setInterpolator(new OvershootInterpolator(1.25f))
+                    .setDuration(420L)
+                    .start();
+        }
+
+        android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactWidth, expandedWidth);
+        opening.setDuration(300L);
+        opening.setInterpolator(new DecelerateInterpolator(1.35f));
+        opening.addUpdateListener(animation -> {
+            int width = (Integer) animation.getAnimatedValue();
+            layoutParams.width = width;
+            transitionContainer.setLayoutParams(layoutParams);
+            updateCompactTrackWindow(contentParams, compactOverlayWidth + width - compactWidth);
+            transitionContainer.setTranslationX(-(width - compactWidth));
+            transitionContainer.requestLayout();
+        });
+        opening.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                track.animate().alpha(1f).setDuration(150L).start();
+                artist.animate().alpha(1f).setDuration(150L).start();
+                refreshHandler.postDelayed(() -> {
+                    if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                    android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(expandedWidth, compactWidth);
+                    closing.setDuration(360L);
+                    closing.setInterpolator(new OvershootInterpolator(1.05f));
+                    closing.addUpdateListener(closeAnimation -> {
+                        int width = (Integer) closeAnimation.getAnimatedValue();
+                        layoutParams.width = width;
+                        transitionContainer.setLayoutParams(layoutParams);
+                        updateCompactTrackWindow(contentParams, compactOverlayWidth + width - compactWidth);
+                        transitionContainer.setTranslationX(-(width - compactWidth));
+                        transitionContainer.requestLayout();
+                    });
+                    closing.addListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override public void onAnimationEnd(android.animation.Animator animation) {
+                            if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                            layoutParams.width = compactWidth;
+                            layoutParams.height = height;
+                            transitionContainer.setLayoutParams(layoutParams);
+                            updateCompactTrackWindow(contentParams, compactOverlayWidth);
+                            transitionContainer.setTranslationX(0f);
+                            track.setAlpha(1f);
+                            artist.setAlpha(1f);
+                            track.setVisibility(android.view.View.GONE);
+                            artist.setVisibility(android.view.View.GONE);
+                            trackTransitionRunning = false;
+                            if (pendingTrackValue != null && !pendingTrackValue.equals(value)) {
+                                String next = pendingTrackValue;
+                                pendingTrackValue = null;
+                                animateCompactTrackChange(next);
+                            }
+                        }
+                    });
+                    closing.start();
+                }, 1250L);
+            }
+        });
+        opening.start();
+    }
+
+    /**
+     * A compact island has a wrap-content window. Alterar apenas a largura do
+     * mediaContainer deixa a animação cortada porque a janela continua com os
+     * bounds compactos. Este método mantém a janela, o content e o WindowManager
+     * sincronizados durante a revelação temporária da informação da faixa.
+     */
+    private void updateCompactTrackWindow(android.view.ViewGroup.LayoutParams contentParams, int width) {
+        if (width <= 0 || playerContent == null) return;
+        if (contentParams != null) {
+            contentParams.width = width;
+            playerContent.setLayoutParams(contentParams);
+        }
+        if (windowParams == null || manager == null || overlay == null) return;
+        windowParams.width = width;
+        String position = getSharedPreferences("dashboard_auto", MODE_PRIVATE)
+                .getString("overlay_position", "center");
+        if ("center".equals(position)) {
+            android.graphics.Rect cutout = centralCutout();
+            int screenWidth = getResources().getDisplayMetrics().widthPixels;
+            windowParams.gravity = Gravity.TOP | Gravity.LEFT;
+            windowParams.x = cutout == null
+                    ? Math.max(0, (screenWidth - width) / 2)
+                    : Math.max(0, cutout.centerX() - width / 2);
+        }
+        try {
+            manager.updateViewLayout(overlay, windowParams);
+        } catch (IllegalArgumentException ignored) { }
+    }
+
     private ImageButton actionButton(int icon, String description, boolean accent) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(icon);
@@ -576,8 +777,10 @@ public class OverlayService extends Service {
             playButton.setRotation(0f);
             playButton.setAlpha(1f);
             if (showPlayingWaves) {
-                playingDrawable = new AnimatedWaveDrawable(accentColor());
-                playButton.setImageDrawable(playingDrawable);
+                if (playingDrawable == null) {
+                    playingDrawable = new AnimatedWaveDrawable(accentColor());
+                    playButton.setImageDrawable(playingDrawable);
+                }
             } else {
                 playButton.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
             }
@@ -586,8 +789,10 @@ public class OverlayService extends Service {
         // Atualiza o estado antes da animação para que toques rápidos nunca
         // deixem uma animação anterior restaurar o ícone errado.
         if (showPlayingWaves) {
-            playingDrawable = new AnimatedWaveDrawable(accentColor());
-            playButton.setImageDrawable(playingDrawable);
+            if (playingDrawable == null) {
+                playingDrawable = new AnimatedWaveDrawable(accentColor());
+                playButton.setImageDrawable(playingDrawable);
+            }
         } else {
             playButton.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
         }
@@ -604,13 +809,15 @@ public class OverlayService extends Service {
                 .start();
     }
 
-    /** Indicador leve de reprodução para o botão direito do player minimizado. */
+    /** Indicador leve de reprodução: barras grandes o suficiente para uso em condução. */
     private static final class AnimatedWaveDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final android.animation.ValueAnimator animator;
         private final float[] phases = new float[]{0f, 1.7f, 3.2f, 4.8f};
+        private int color;
 
         AnimatedWaveDrawable(int color) {
+            this.color = color;
             paint.setColor(color);
             paint.setStyle(Paint.Style.FILL);
             animator = android.animation.ValueAnimator.ofFloat(0f, (float) (Math.PI * 2));
@@ -647,7 +854,99 @@ public class OverlayService extends Service {
         void stop() { animator.cancel(); invalidateSelf(); }
     }
 
+    private void addCallInfo(LinearLayout parent, boolean expandedLayout) {
+        parent.setPadding(dp(expandedLayout ? 10 : 8), dp(expandedLayout ? 8 : 6), dp(expandedLayout ? 12 : 8), dp(expandedLayout ? 8 : 6));
+        callArtwork = new ImageView(this);
+        callArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        callArtwork.setBackground(mediaBackground());
+        callArtwork.setImageResource(android.R.drawable.sym_action_call);
+        android.graphics.Bitmap contactPhoto = loadContactPhoto(callNumber);
+        if (contactPhoto != null) callArtwork.setImageBitmap(contactPhoto);
+        int avatarSize = controlDp(expandedLayout ? 58 : 40);
+        parent.addView(callArtwork, new LinearLayout.LayoutParams(avatarSize, avatarSize));
+
+        LinearLayout details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setGravity(Gravity.CENTER_VERTICAL);
+        details.setPadding(dp(10), 0, dp(8), 0);
+        callName = new TextView(this);
+        callName.setTextColor(Color.WHITE);
+        callName.setTextSize(expandedLayout ? 15 : 12);
+        callName.setMaxLines(1);
+        callName.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        callName.setText(resolveContactName(callNumber));
+        TextView state = new TextView(this);
+        state.setText("Chamada ativa");
+        state.setTextColor(Color.rgb(166, 166, 178));
+        state.setTextSize(expandedLayout ? 12 : 10);
+        callDuration = new TextView(this);
+        callDuration.setTextColor(accentColor());
+        callDuration.setTextSize(expandedLayout ? 13 : 11);
+        callDuration.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        details.addView(callName, new LinearLayout.LayoutParams(-1, -2));
+        details.addView(state, new LinearLayout.LayoutParams(-1, -2));
+        details.addView(callDuration, new LinearLayout.LayoutParams(-1, -2));
+        parent.addView(details, new LinearLayout.LayoutParams(0, -1, 1f));
+        updateCallUi();
+    }
+
+    private String resolveContactName(String number) {
+        if (number == null || number.trim().isEmpty()) return "Chamada ativa";
+        if (android.os.Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission("android.permission.READ_CONTACTS") != android.content.pm.PackageManager.PERMISSION_GRANTED) return number;
+        android.database.Cursor cursor = null;
+        try {
+            android.net.Uri lookup = android.net.Uri.withAppendedPath(
+                    android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                    android.net.Uri.encode(number));
+            cursor = getContentResolver().query(lookup,
+                    new String[]{android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME}, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) return cursor.getString(0);
+        } catch (RuntimeException ignored) { }
+        finally { if (cursor != null) cursor.close(); }
+        return number;
+    }
+
+    private android.graphics.Bitmap loadContactPhoto(String number) {
+        if (number == null || number.trim().isEmpty()) return null;
+        if (android.os.Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission("android.permission.READ_CONTACTS") != android.content.pm.PackageManager.PERMISSION_GRANTED) return null;
+        android.database.Cursor cursor = null;
+        try {
+            android.net.Uri lookup = android.net.Uri.withAppendedPath(
+                    android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                    android.net.Uri.encode(number));
+            cursor = getContentResolver().query(lookup,
+                    new String[]{android.provider.ContactsContract.PhoneLookup._ID}, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                long id = cursor.getLong(0);
+                android.net.Uri photoUri = android.content.ContentUris.withAppendedId(
+                        android.provider.ContactsContract.Contacts.CONTENT_URI, id);
+                try (java.io.InputStream input = android.provider.ContactsContract.Contacts.openContactPhotoInputStream(
+                        getContentResolver(), photoUri, true)) {
+                    return input == null ? null : android.graphics.BitmapFactory.decodeStream(input);
+                }
+            }
+        } catch (Exception ignored) { }
+        finally { if (cursor != null) cursor.close(); }
+        return null;
+    }
+
+    private void endCurrentCall() {
+        try {
+            android.telecom.TelecomManager telecom = (android.telecom.TelecomManager) getSystemService(TELECOM_SERVICE);
+            if (telecom != null && android.os.Build.VERSION.SDK_INT >= 28) telecom.endCall();
+        } catch (SecurityException ignored) {
+            android.widget.Toast.makeText(this, "O Android não permitiu desligar a chamada", android.widget.Toast.LENGTH_SHORT).show();
+        } catch (RuntimeException ignored) { }
+    }
+
     private void addExpandedActions(LinearLayout parent) {
+        if (callActive) {
+            ImageButton endCall = actionButton(R.drawable.ic_close, "Desligar chamada", true);
+            endCall.setOnClickListener(v -> endCurrentCall());
+            parent.addView(endCall, secondaryButtonParams());
+        }
         ImageButton navigation = actionButton(R.drawable.ic_map, "Abrir navegação", false);
         navigation.setOnClickListener(v -> openConfigured("navigation_app"));
         parent.addView(navigation, secondaryButtonParams());
@@ -673,135 +972,6 @@ public class OverlayService extends Service {
         int margin = controlDp(expanded ? 5 : 2);
         params.setMargins(margin, margin, margin, margin);
         return params;
-    }
-
-    private boolean dragOverlay(android.view.View view, MotionEvent event) {
-        if (windowParams == null || manager == null) return false;
-        if (layoutTransitionRunning) return true;
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-            dragGestureId++;
-            dragActive = true;
-            dragTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
-            if (dragVelocity != null) dragVelocity.recycle();
-            dragVelocity = VelocityTracker.obtain();
-            dragVelocity.addMovement(event);
-            downX = event.getRawX(); downY = event.getRawY();
-            startX = windowParams.x; startY = windowParams.y;
-            pendingDragX = startX;
-            pendingDragY = startY;
-            dragMoved = false;
-            if (musicInfoContainer != null) {
-                musicInfoContainer.animate().cancel();
-                musicInfoContainer.setTranslationX(0f);
-                musicInfoContainer.setAlpha(1f);
-            }
-            if (overlay != null) {
-                overlay.animate().cancel();
-                overlay.setTranslationX(0f);
-                overlay.setTranslationY(0f);
-                overlay.setAlpha(1f);
-            }
-            showDropZone(false);
-            return true;
-        }
-        if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-            if (dragVelocity != null) dragVelocity.addMovement(event);
-            if (Math.abs(event.getRawX() - downX) > dragTouchSlop || Math.abs(event.getRawY() - downY) > dragTouchSlop) dragMoved = true;
-            // A drop zone existe apenas na parte inferior e serve exclusivamente
-            // para fechar o mini player. Nunca a mover para o topo: isso ocupava
-            // espaço e impedia posicionar o player junto ao limite superior.
-            int screenWidth = getResources().getDisplayMetrics().widthPixels;
-            int screenHeight = getResources().getDisplayMetrics().heightPixels;
-            int draggedX = Math.max(0, startX + (int) (event.getRawX() - downX));
-            int draggedY = Math.max(0, startY + (int) (event.getRawY() - downY));
-            int playerWidth = visualOverlayWidth();
-            int playerHeight = visualOverlayHeight();
-            int targetY = Math.max(0, screenHeight - playerHeight - dp(18));
-            boolean approachingBottom = event.getRawY() >= downY;
-            float normalizedDistance = approachingBottom
-                    ? Math.max(0f, Math.min(1f, (event.getRawY() - (screenHeight - dp(320))) / (float) dp(320)))
-                    : 0f;
-            float magnetProgress = normalizedDistance * normalizedDistance * (3f - 2f * normalizedDistance);
-            // O íman atua apenas no eixo vertical. O eixo horizontal deve
-            // continuar totalmente livre para o utilizador posicionar o
-            // player onde quiser, incluindo tablets e ecrãs largos.
-            int nextX = draggedX;
-            int nextY = Math.max(0, (int) (draggedY + (targetY - draggedY) * magnetProgress * .9f));
-            nextX = Math.min(nextX, Math.max(0, screenWidth - playerWidth));
-            nextY = Math.min(nextY, Math.max(0, screenHeight - playerHeight));
-            boolean overDropZone = magnetProgress > (dropZoneActive ? .25f : .45f);
-            dropZoneActive = overDropZone;
-            if (dropZone != null) dropZone.setBackground(dropZoneBackground(overDropZone));
-            scheduleDragPosition(nextX, nextY);
-            return true;
-        }
-        if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-            if (dragVelocity != null) dragVelocity.addMovement(event);
-            float velocityY = 0f;
-            float velocityX = 0f;
-            if (dragVelocity != null) {
-                dragVelocity.computeCurrentVelocity(1000);
-                velocityY = dragVelocity.getYVelocity();
-                velocityX = dragVelocity.getXVelocity();
-                dragVelocity.recycle();
-                dragVelocity = null;
-            }
-            dragActive = false;
-            dragFramePosted = false;
-            if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                dragGestureId++;
-                dropZoneActive = false;
-                hideDropZone();
-                return true;
-            }
-            if (dragMoved) {
-                // O último MOVE pode ainda estar agendado para o frame seguinte.
-                // Usa-o já no UP para o snap não ficar um frame atrás do dedo.
-                windowParams.x = pendingDragX;
-                windowParams.y = pendingDragY;
-            }
-            float deltaY = event.getRawY() - downY;
-            float deltaX = event.getRawX() - downX;
-            int screenHeight = getResources().getDisplayMetrics().heightPixels;
-            boolean overDropZone = event.getRawY() > screenHeight - dp(180);
-            dropZoneActive = false;
-            hideDropZone();
-            boolean verticalSwipe = Math.abs(deltaY) > Math.abs(deltaX) * 1.2f
-                    || Math.abs(velocityY) > Math.abs(velocityX) * 1.2f;
-            boolean fastDownwardSwipe = velocityY > dp(900f);
-            if (!dragMoved && Math.abs(deltaX) < dp(12) && Math.abs(deltaY) < dp(12)) {
-                view.performClick();
-                return true;
-            }
-            if ((deltaY > dp(84) || fastDownwardSwipe) && overDropZone && verticalSwipe) {
-                hideMiniPlayer();
-                return true;
-            }
-            // Não fazer snap lateral no fim do gesto: o arrastamento deve
-            // preservar a posição escolhida, sem colar o player à esquerda
-            // ou à direita.
-            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
-            persistOverlayPosition();
-            return true;
-        }
-        return true;
-    }
-
-    private void scheduleDragPosition(int x, int y) {
-        if (overlay == null || windowParams == null || manager == null) return;
-        pendingDragX = x;
-        pendingDragY = y;
-        if (dragFramePosted) return;
-        dragFramePosted = true;
-        FrameLayout scheduledOverlay = overlay;
-        int scheduledGestureId = dragGestureId;
-        overlay.postOnAnimation(() -> {
-            dragFramePosted = false;
-            if (!dragActive || dragGestureId != scheduledGestureId || overlay != scheduledOverlay || windowParams == null || manager == null) return;
-            windowParams.x = pendingDragX;
-            windowParams.y = pendingDragY;
-            try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
-        });
     }
 
     private int visualOverlayWidth() {
@@ -942,10 +1112,8 @@ public class OverlayService extends Service {
         getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
                 .remove("overlay_x")
                 .remove("overlay_y")
-                .remove("overlay_scale")
                 .apply();
         if (overlay == null || windowParams == null || manager == null) return;
-        applyOverlayScale(1f, false);
         applyIslandPosition(windowParams);
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
         clampOverlayPosition();
@@ -962,17 +1130,8 @@ public class OverlayService extends Service {
 
     private void removeOverlay() {
         refreshHandler.removeCallbacks(refreshTrack);
+        trackAnimationToken++;
         layoutTransitionRunning = false;
-        dragActive = false;
-        dragMoved = false;
-        dragGestureId++;
-        dragFramePosted = false;
-        resizeFramePosted = false;
-        resizeGestureId++;
-        if (dragVelocity != null) {
-            dragVelocity.recycle();
-            dragVelocity = null;
-        }
         if (overlay != null) {
             overlay.animate().cancel();
             overlay.setTranslationX(0f);
@@ -983,10 +1142,19 @@ public class OverlayService extends Service {
             musicInfoContainer.setTranslationX(0f);
             musicInfoContainer.setAlpha(1f);
         }
+        if (artwork != null) {
+            artwork.animate().cancel();
+            artwork.setTranslationX(0f);
+            artwork.setTranslationY(0f);
+            artwork.setScaleX(1f);
+            artwork.setScaleY(1f);
+            artwork.setRotation(0f);
+            artwork.setRotationY(0f);
+            artwork.setAlpha(1f);
+        }
         if (overlay != null && manager != null) {
             try { manager.removeView(overlay); } catch (IllegalArgumentException ignored) { }
         }
-        hideDropZone();
         overlay = null;
         track = null;
         artist = null;
@@ -1102,44 +1270,6 @@ public class OverlayService extends Service {
                 .start();
     }
 
-    private void showDropZone(boolean ignoredTop) {
-        if (dropZone != null || manager == null) return;
-        dropZoneTop = false;
-        dropZone = new TextView(this);
-        dropZone.setText("↓  Soltar para fechar  ↓");
-        dropZone.setTextColor(Color.WHITE);
-        dropZone.setTextSize(12);
-        dropZone.setGravity(Gravity.CENTER);
-        dropZone.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
-        dropZone.setBackground(dropZoneBackground(false));
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                dp(210), dp(48), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        params.y = dp(10);
-        dropZoneParams = params;
-        try {
-            manager.addView(dropZone, params);
-            dropZone.setAlpha(0f);
-            dropZone.animate().alpha(1f).setDuration(140).start();
-        } catch (RuntimeException ignored) { dropZone = null; }
-    }
-
-    private void setDropZoneMode(boolean top) {
-        // Mantido como ponto de compatibilidade para chamadas antigas. A zona
-        // nunca muda de posição: fica sempre em baixo para fechar o player.
-    }
-
-    private GradientDrawable dropZoneBackground(boolean active) {
-        GradientDrawable background = new GradientDrawable();
-        int accent = accentColor();
-        background.setColor(active ? Color.argb(220, Color.red(accent), Color.green(accent), Color.blue(accent)) : Color.rgb(44, 44, 55));
-        background.setCornerRadius(dp(20));
-        background.setStroke(dp(1), active ? Color.rgb(Math.min(255, Color.red(accent) + 55), Math.min(255, Color.green(accent) + 55), Math.min(255, Color.blue(accent) + 55)) : Color.rgb(100, 100, 115));
-        return background;
-    }
-
     private int accentColor() {
         String key = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("accent_color", "blue");
         if ("pink".equals(key)) return Color.rgb(255, 55, 95);
@@ -1149,147 +1279,11 @@ public class OverlayService extends Service {
         return Color.rgb(10, 132, 255);
     }
 
-    private void hideDropZone() {
-        dropZoneActive = false;
-        if (dropZone == null) return;
-        TextView current = dropZone;
-        dropZone = null;
-        dropZoneParams = null;
-        current.animate().alpha(0f).setDuration(100).withEndAction(() -> {
-            try { if (manager != null) manager.removeView(current); } catch (IllegalArgumentException ignored) { }
-        }).start();
-    }
-
     private LinearLayout.LayoutParams mediaButtonParams() {
         int size = controlDp(expanded ? 56 : 36);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
         params.setMargins(dp(3), dp(3), dp(3), dp(3));
         return params;
-    }
-
-    private void addResizeHandle(FrameLayout parent) {
-        ImageButton handle = new ImageButton(this);
-        resizeHandle = handle;
-        handle.setImageResource(R.drawable.ic_resize);
-        handle.setContentDescription("Redimensionar player");
-        handle.setTooltipText("Arrastar para redimensionar");
-        // Ícone discreto com área de toque confortável para utilização em condução.
-        handle.setPadding(dp(7), dp(7), dp(7), dp(7));
-        handle.setMinimumWidth(dp(32));
-        handle.setMinimumHeight(dp(32));
-        handle.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        handle.setAlpha(.82f);
-        handle.setBackgroundColor(Color.TRANSPARENT);
-        // Área visual pequena no canto; os 44dp continuam a ser apenas a área
-        // de toque para não obrigar a acertar num ícone minúsculo.
-        FrameLayout.LayoutParams handleParams = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.START);
-        handleParams.setMargins(0, 0, 0, 0);
-        parent.addView(handle, handleParams);
-        final float[] initialScale = {1f};
-        final float[] initialX = {0f};
-        final float[] initialY = {0f};
-        handle.setOnTouchListener((view, event) -> {
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                resizeGestureId++;
-                initialScale[0] = playerContent == null ? 1f : playerContent.getScaleX();
-                pendingResizeScale = initialScale[0];
-                initialX[0] = event.getRawX();
-                initialY[0] = event.getRawY();
-                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-                return true;
-            }
-            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-                float horizontalDelta = event.getRawX() - initialX[0];
-                float verticalDelta = event.getRawY() - initialY[0];
-                // O gesto acompanha a diagonal do canto e mantém a proporção do player inteiro.
-                float diagonalDelta = (horizontalDelta + verticalDelta) * .5f;
-                float delta = diagonalDelta / dp(300f);
-                float scale = clampOverlayScale(initialScale[0] + delta);
-                scheduleOverlayScale(scale);
-                return true;
-            }
-            if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                resizeFramePosted = false;
-                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-                    applyOverlayScale(pendingResizeScale, true);
-                    view.performClick();
-                } else {
-                    resizeGestureId++;
-                    pendingResizeScale = initialScale[0];
-                    applyOverlayScale(initialScale[0], false);
-                }
-                return true;
-            }
-            return true;
-        });
-    }
-
-    private void scheduleOverlayScale(float scale) {
-        if (overlay == null) return;
-        pendingResizeScale = clampOverlayScale(scale);
-        if (resizeFramePosted) return;
-        resizeFramePosted = true;
-        FrameLayout scheduledOverlay = overlay;
-        int scheduledGestureId = resizeGestureId;
-        overlay.postOnAnimation(() -> {
-            resizeFramePosted = false;
-            if (overlay == scheduledOverlay && resizeGestureId == scheduledGestureId) applyOverlayScale(pendingResizeScale, false);
-        });
-    }
-
-    private void applyOverlayScale(float scale, boolean persist) {
-        if (overlay == null) return;
-        float clampedScale = clampOverlayScale(scale);
-        if (playerContent != null) {
-            playerContent.setPivotX(0f);
-            playerContent.setPivotY(0f);
-            playerContent.setScaleX(clampedScale);
-            playerContent.setScaleY(clampedScale);
-        }
-        positionResizeHandle(clampedScale);
-        syncWindowBounds(clampedScale);
-        // Ao aumentar o player, conserva a posição escolhida mas garante que
-        // a nova caixa visual continua totalmente dentro do ecrã.
-        clampOverlayPosition();
-        if (persist) {
-            getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit()
-                    .putFloat("overlay_scale", clampedScale)
-                    .apply();
-        }
-    }
-
-    private float clampOverlayScale(float scale) {
-        if (Float.isNaN(scale) || Float.isInfinite(scale)) return 1f;
-        float maxScale = maxOverlayScaleForScreen();
-        float minScale = Math.min(MIN_OVERLAY_SCALE, maxScale);
-        return Math.max(minScale, Math.min(maxScale, scale));
-    }
-
-    private float maxOverlayScaleForScreen() {
-        if (baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return MAX_OVERLAY_SCALE;
-        int safeWidth = Math.max(1, getResources().getDisplayMetrics().widthPixels - dp(16));
-        int safeHeight = Math.max(1, getResources().getDisplayMetrics().heightPixels - dp(16));
-        float widthLimit = safeWidth / (float) baseOverlayWidth;
-        float heightLimit = safeHeight / (float) baseOverlayHeight;
-        return Math.max(.1f, Math.min(MAX_OVERLAY_SCALE, Math.min(widthLimit, heightLimit)));
-    }
-
-    private void positionResizeHandle(float scale) {
-        if (resizeHandle == null || overlay == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        int handleWidth = resizeHandle.getMeasuredWidth() > 0 ? resizeHandle.getMeasuredWidth() : dp(32);
-        int handleHeight = resizeHandle.getMeasuredHeight() > 0 ? resizeHandle.getMeasuredHeight() : dp(32);
-        resizeHandle.setX(Math.max(0, baseOverlayWidth * scale - handleWidth));
-        resizeHandle.setY(Math.max(0, baseOverlayHeight * scale - handleHeight));
-    }
-
-    private void syncWindowBounds(float scale) {
-        if (overlay == null || windowParams == null || manager == null || baseOverlayWidth <= 0 || baseOverlayHeight <= 0) return;
-        // A janela e o conteúdo usam a mesma escala. A raiz mantém escala 1,
-        // evitando que o Android faça hit-testing com uma matriz diferente da
-        // que desenha os botões.
-        windowParams.width = Math.max(1, Math.round(baseOverlayWidth * scale));
-        windowParams.height = Math.max(1, Math.round(baseOverlayHeight * scale));
-        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
     private void runMediaAction(Runnable action) {
