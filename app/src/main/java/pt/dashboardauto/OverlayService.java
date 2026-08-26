@@ -184,7 +184,7 @@ public class OverlayService extends Service {
         LinearLayout content = new LinearLayout(this);
         content.setClipChildren(false);
         content.setOrientation(!expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
-        content.setGravity(Gravity.CENTER);
+        content.setGravity(expanded ? Gravity.CENTER : (Gravity.RIGHT | Gravity.CENTER_VERTICAL));
         content.setClickable(true);
         content.setOnClickListener(v -> {
             if (!expanded) {
@@ -359,7 +359,9 @@ public class OverlayService extends Service {
         }
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
-        overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        int compactWindowWidth = Math.min(dp(224), compactAvailableWidth);
+        overlay.addView(content, new FrameLayout.LayoutParams(
+                expanded ? -2 : compactWindowWidth, -2, Gravity.TOP | Gravity.START));
         overlay.setOnTouchListener((view, event) -> {
             if (expanded && event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
                 toggleExpanded();
@@ -387,7 +389,10 @@ public class OverlayService extends Service {
                 android.util.Log.d("DriveDeckIsland", "compact tap -> expand");
                 toggleExpanded();
             });
-            overlay.addView(compactTapTarget, new FrameLayout.LayoutParams(compactIslandWidth(), dp(42), Gravity.TOP | Gravity.START));
+            FrameLayout.LayoutParams compactTapParams = new FrameLayout.LayoutParams(
+                    compactIslandWidth(), dp(42), Gravity.TOP | Gravity.START);
+            compactTapParams.leftMargin = Math.max(0, compactWindowWidth - compactIslandWidth());
+            overlay.addView(compactTapTarget, compactTapParams);
         }
         playerContent = content;
         content.addOnLayoutChangeListener((view, left, top, right, bottom,
@@ -565,9 +570,9 @@ public class OverlayService extends Service {
     private GradientDrawable panelBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
-                    Color.argb(178, 18, 19, 25),
-                    Color.argb(145, 8, 9, 14),
-                    Color.argb(170, 38, 18, 28)})
+                    Color.argb(236, 18, 19, 25),
+                    Color.argb(224, 8, 9, 14),
+                    Color.argb(232, 38, 18, 28)})
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
                     Color.rgb(27, 29, 39),
                     Color.rgb(7, 8, 13),
@@ -771,20 +776,15 @@ public class OverlayService extends Service {
         transitionContainer.animate().cancel();
         if (artwork != null) artwork.animate().cancel();
 
-        final int compactWidth = Math.max(1, windowParams.width);
-        final int rightEdge = windowParams.x + compactWidth;
-        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        final int expandedWidth = Math.min(dp(224), Math.min(screenWidth - dp(16), rightEdge - dp(8)));
+        final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
+        final int compactWidth = Math.max(1, mediaParams.width > 0 ? mediaParams.width : compactIslandWidth());
+        final int expandedWidth = Math.min(dp(224), Math.max(compactWidth, playerContent.getWidth()));
         if (expandedWidth <= compactWidth + dp(12)) {
             renderTrack(value);
             finishTrackAnimation(animationToken, value);
             return;
         }
-        final int compactX = windowParams.x;
-        final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
-        final android.view.ViewGroup.LayoutParams contentParams = playerContent.getLayoutParams();
         final int compactMediaWidth = mediaParams.width;
-        final int compactContentWidth = contentParams.width;
         final int compactTrackVisibility = track.getVisibility();
         final int compactArtistVisibility = artist.getVisibility();
         track.setVisibility(android.view.View.VISIBLE);
@@ -793,49 +793,47 @@ public class OverlayService extends Service {
         artist.setTextSize(9);
         track.setAlpha(0f);
         artist.setAlpha(0f);
+        track.setTranslationX(-dp(10));
+        artist.setTranslationX(-dp(10));
         renderTrack(value);
 
-        // O lado direito fica fixo e a largura cresce para a esquerda. Assim a
-        // animação mostra o título sem reancorar a ilha sobre a câmara.
+        // A caixa exterior já tem largura fixa. Só o mediaContainer cresce
+        // para a esquerda dentro dela, logo o WindowManager não reposiciona a
+        // ilha nem a faz saltar atrás do recorte.
         android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactWidth, expandedWidth);
         opening.setDuration(280L);
         opening.setInterpolator(new DecelerateInterpolator(1.45f));
         opening.addUpdateListener(animation -> {
             int width = (Integer) animation.getAnimatedValue();
             mediaParams.width = width;
-            contentParams.width = width;
             transitionContainer.setLayoutParams(mediaParams);
-            playerContent.setLayoutParams(contentParams);
-            updateCompactTrackWindowAt(width, rightEdge - width);
         });
         opening.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator animation) {
                 if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
-                track.animate().alpha(1f).setDuration(170L).start();
-                artist.animate().alpha(1f).setDuration(170L).start();
+                track.animate().alpha(1f).translationX(0f).setDuration(220L).start();
+                artist.animate().alpha(1f).translationX(0f).setDuration(240L).start();
                 refreshHandler.postDelayed(() -> {
                     if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                    track.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
+                    artist.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
                     android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(expandedWidth, compactWidth);
                     closing.setDuration(300L);
                     closing.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
                     closing.addUpdateListener(closeAnimation -> {
                         int width = (Integer) closeAnimation.getAnimatedValue();
                         mediaParams.width = width;
-                        contentParams.width = width;
                         transitionContainer.setLayoutParams(mediaParams);
-                        playerContent.setLayoutParams(contentParams);
-                        updateCompactTrackWindowAt(width, rightEdge - width);
                     });
                     closing.addListener(new android.animation.AnimatorListenerAdapter() {
                         @Override public void onAnimationEnd(android.animation.Animator animation) {
                             if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
                             mediaParams.width = compactMediaWidth;
-                            contentParams.width = compactContentWidth;
                             transitionContainer.setLayoutParams(mediaParams);
-                            playerContent.setLayoutParams(contentParams);
-                            updateCompactTrackWindowAt(compactWidth, compactX);
                             track.setAlpha(1f);
                             artist.setAlpha(1f);
+                            track.setTranslationX(0f);
+                            artist.setTranslationX(0f);
                             track.setTextSize(12);
                             artist.setTextSize(10);
                             track.setVisibility(compactTrackVisibility);
@@ -858,43 +856,6 @@ public class OverlayService extends Service {
             pendingTrackValue = null;
             animateCompactTrackChange(next);
         }
-    }
-
-    private void updateCompactTrackWindowAt(int width, int x) {
-        if (windowParams == null || manager == null || overlay == null) return;
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        windowParams.width = Math.max(1, Math.min(width, screenWidth - dp(8)));
-        windowParams.x = Math.max(dp(4), Math.min(x, screenWidth - windowParams.width - dp(4)));
-        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
-    }
-
-    /**
-     * A compact island has a wrap-content window. Alterar apenas a largura do
-     * mediaContainer deixa a animação cortada porque a janela continua com os
-     * bounds compactos. Este método mantém a janela, o content e o WindowManager
-     * sincronizados durante a revelação temporária da informação da faixa.
-     */
-    private void updateCompactTrackWindow(android.view.ViewGroup.LayoutParams contentParams, int width) {
-        if (width <= 0 || playerContent == null) return;
-        if (contentParams != null) {
-            contentParams.width = width;
-            playerContent.setLayoutParams(contentParams);
-        }
-        if (windowParams == null || manager == null || overlay == null) return;
-        windowParams.width = width;
-        String position = getSharedPreferences("dashboard_auto", MODE_PRIVATE)
-                .getString("overlay_position", "center");
-        if ("center".equals(position)) {
-            android.graphics.Rect cutout = centralCutout();
-            int screenWidth = getResources().getDisplayMetrics().widthPixels;
-            windowParams.gravity = Gravity.TOP | Gravity.LEFT;
-            windowParams.x = cutout == null
-                    ? Math.max(0, (screenWidth - width) / 2)
-                    : Math.max(0, cutout.centerX() - width / 2);
-        }
-        try {
-            manager.updateViewLayout(overlay, windowParams);
-        } catch (IllegalArgumentException ignored) { }
     }
 
     private ImageButton actionButton(int icon, String description, boolean accent) {
@@ -1231,7 +1192,17 @@ public class OverlayService extends Service {
         if (cutout == null) return;
         int islandWidth = visualOverlayWidth();
         int maxX = Math.max(0, getResources().getDisplayMetrics().widthPixels - islandWidth);
-        int targetX = Math.max(0, Math.min(maxX, cutout.centerX() - islandWidth / 2));
+        int targetX;
+        if (!expanded) {
+            // A caixa compacta tem largura fixa para a animação do título. A
+            // pill visível está alinhada à direita dessa caixa, centrada no
+            // recorte, para que nenhum frame tenha de mover a janela.
+            int visibleWidth = compactIslandWidth();
+            targetX = cutout.centerX() - visibleWidth / 2 - (islandWidth - visibleWidth);
+        } else {
+            targetX = cutout.centerX() - islandWidth / 2;
+        }
+        targetX = Math.max(0, Math.min(maxX, targetX));
         int targetY = topIslandY();
         int centerLeftGravity = Gravity.TOP | Gravity.LEFT;
         if (windowParams.gravity == centerLeftGravity && windowParams.x == targetX && windowParams.y == targetY) return;
@@ -1393,19 +1364,6 @@ public class OverlayService extends Service {
             addOverlay();
             layoutTransitionRunning = false;
         }).start();
-    }
-
-    private void showCloseOptions() {
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Fechar Car Mode")
-                .setItems(new String[]{"Fechar mini player", "Fechar tudo"}, (ignored, which) -> {
-                    if (which == 0) hideMiniPlayer();
-                    else closeEverything();
-                })
-                .setNegativeButton("Cancelar", null)
-                .create();
-        if (dialog.getWindow() != null) dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
-        dialog.show();
     }
 
     private void closeEverything() {
