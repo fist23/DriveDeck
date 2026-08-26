@@ -69,6 +69,25 @@ public final class MusicController {
         return result[0];
     }
 
+    /** Identidade estável para detetar mudanças de faixa mesmo quando o texto
+     * apresentado pelo player ainda não foi atualizado. */
+    public static String currentTrackKey(Context context) {
+        final String[] result = {""};
+        withSelected(context, controller -> {
+            android.media.MediaMetadata metadata = controller.getMetadata();
+            if (metadata == null) return;
+            CharSequence title = trackTitle(metadata);
+            CharSequence artist = metadata.getText(android.media.MediaMetadata.METADATA_KEY_ARTIST);
+            CharSequence album = metadata.getText(android.media.MediaMetadata.METADATA_KEY_ALBUM);
+            long duration = metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
+            result[0] = controller.getPackageName() + "|"
+                    + (title == null ? "" : title) + "|"
+                    + (artist == null ? "" : artist) + "|"
+                    + (album == null ? "" : album) + "|" + duration;
+        });
+        return result[0];
+    }
+
     public static Bitmap currentArtwork(Context context) {
         final Bitmap[] result = {null};
         withSelected(context, controller -> {

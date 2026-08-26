@@ -62,6 +62,7 @@ public class OverlayService extends Service {
     private boolean userSeeking;
     private boolean playingState;
     private String lastTrackValue;
+    private String lastTrackKey;
     private String pendingTrackValue;
     private boolean trackTransitionRunning;
     private int trackAnimationToken;
@@ -193,7 +194,7 @@ public class OverlayService extends Service {
                 toggleExpanded();
             }
         });
-        content.setPadding(dp(expanded ? 16 : 4), dp(expanded ? 14 : 3), dp(expanded ? 16 : 4), dp(expanded ? 14 : 3));
+        content.setPadding(dp(expanded ? 14 : 4), dp(expanded ? 9 : 3), dp(expanded ? 14 : 4), dp(expanded ? 9 : 3));
         boolean splitCompactIsland = !expanded && isCenterIslandPosition();
         content.setBackground(splitCompactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
@@ -201,7 +202,7 @@ public class OverlayService extends Service {
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
-        mediaInfo.setPadding(dp(expanded ? 14 : 4), dp(expanded ? 12 : 3), dp(expanded ? 14 : 4), dp(expanded ? 12 : 3));
+        mediaInfo.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 8 : 3), dp(expanded ? 12 : 4), dp(expanded ? 8 : 3));
         mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
         mediaInfo.setOnClickListener(v -> {
             if (!expanded) toggleExpanded();
@@ -233,7 +234,8 @@ public class OverlayService extends Service {
         artwork.setClipToOutline(true);
         artwork.setOutlineProvider(new android.view.ViewOutlineProvider() {
             @Override public void getOutline(android.view.View view, android.graphics.Outline outline) {
-                outline.setOval(0, 0, view.getWidth(), view.getHeight());
+                if (expanded) outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(16));
+                else outline.setOval(0, 0, view.getWidth(), view.getHeight());
             }
         });
         int artworkSize = controlDp(expanded ? 64 : 28);
@@ -300,6 +302,13 @@ public class OverlayService extends Service {
                 }
             });
             labels.addView(progressBar, new LinearLayout.LayoutParams(-1, dp(24)));
+            if (!callActive) {
+                compactWave = new ImageView(this);
+                compactWave.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+                compactWave.setPadding(dp(4), dp(4), dp(4), dp(4));
+                mediaInfo.addView(compactWave, new LinearLayout.LayoutParams(dp(38), dp(38)));
+                updateCompactWave(playingState);
+            }
         }
         // In compact mode the island behaves like an iPhone Dynamic Island:
         // artwork and the expand affordance remain visible, while metadata is
@@ -323,15 +332,15 @@ public class OverlayService extends Service {
         // 112dp deixa espaço equilibrado para a capa e para as ondas nos ecrãs
         // com punch-hole, mantendo a janela tocável e sem ocupar o topo todo.
         int compactMediaWidth = callActive ? dp(180) : compactIslandWidth();
-        int expandedMaxWidth = Math.min(dp(520), availableWidth);
+        int expandedMaxWidth = Math.min(dp(390), availableWidth);
         int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : expandedMaxWidth;
         int minimumMediaWidth = Math.min(dp(expanded ? 320 : 42), expanded ? availableWidth : compactAvailableWidth);
-        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 132 : 42)));
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 112 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
         if (!expanded || callActive) controls.setVisibility(android.view.View.GONE);
-        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(expanded ? -1 : -2, controlDp(expanded ? 82 : 46));
+        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(expanded ? -1 : -2, controlDp(expanded ? 70 : 46));
         if (!expanded && isCenterIslandPosition()) {
             controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
         }
@@ -353,11 +362,7 @@ public class OverlayService extends Service {
         }
         if (callActive) controls.setVisibility(android.view.View.GONE);
         if (expanded && !callActive) {
-            LinearLayout extra = new LinearLayout(this);
-            extra.setOrientation(LinearLayout.HORIZONTAL);
-            extra.setGravity(Gravity.CENTER);
-            addExpandedActions(extra);
-            content.addView(extra, new LinearLayout.LayoutParams(-2, controlDp(58)));
+            addExpandedActions(controls);
         }
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
@@ -626,8 +631,8 @@ public class OverlayService extends Service {
         button.setColorFilter(Color.WHITE);
         button.setContentDescription(description);
         button.setTooltipText(description);
-        button.setPadding(dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12));
-        button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        button.setPadding(dp(8), dp(8), dp(8), dp(8));
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER);
         GradientDrawable background = new GradientDrawable();
         background.setColor(Color.TRANSPARENT);
         background.setShape(GradientDrawable.OVAL);
@@ -652,8 +657,13 @@ public class OverlayService extends Service {
     private void updateTrack() {
         if (track == null) return;
         String value = MusicController.currentTrack(this);
-        boolean trackChanged = lastTrackValue != null && !lastTrackValue.equals(value);
+        String trackKey = MusicController.currentTrackKey(this);
+        boolean textChanged = lastTrackValue != null && !lastTrackValue.equals(value);
+        boolean keyChanged = lastTrackKey != null && !lastTrackKey.isEmpty()
+                && !lastTrackKey.equals(trackKey);
+        boolean trackChanged = textChanged || keyChanged;
         lastTrackValue = value;
+        lastTrackKey = trackKey;
         if (trackChanged) animateTrackChange(value); else renderTrack(value, false);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
@@ -1337,6 +1347,7 @@ public class OverlayService extends Service {
         playButton = null;
         windowParams = null;
         lastTrackValue = null;
+        lastTrackKey = null;
         pendingTrackValue = null;
         trackTransitionRunning = false;
         playerContent = null;
@@ -1389,6 +1400,9 @@ public class OverlayService extends Service {
     }
 
     private void closeEverything() {
+        // Pausa antes de fechar o overlay/apps para não deixar áudio a tocar
+        // depois de o utilizador sair do Car Mode.
+        MusicController.pause(this);
         sendBroadcast(new Intent(ACTION_CLOSE_EVERYTHING).setPackage(getPackageName()));
         stopSelf();
         Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
