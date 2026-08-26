@@ -168,7 +168,29 @@ public class OverlayService extends Service {
             if (!expanded) toggleExpanded();
             else openConfigured("music_app");
         });
+        mediaInfo.setClickable(true);
+        mediaInfo.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                view.setPressed(true);
+                view.animate().scaleX(.985f).scaleY(.985f).setDuration(70).start();
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                view.setPressed(false);
+                view.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+                view.performClick();
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                view.setPressed(false);
+                view.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+                return true;
+            }
+            return true;
+        });
         artwork = new ImageView(this);
+        artwork.setClickable(true);
+        artwork.setOnClickListener(v -> mediaInfo.performClick());
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.setBackgroundColor(Color.rgb(65, 27, 40));
         int artworkSize = controlDp(expanded ? 58 : 28);
@@ -177,11 +199,17 @@ public class OverlayService extends Service {
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL);
         labels.setPadding(dp(8), 0, 0, 0);
+        labels.setClickable(true);
+        labels.setOnClickListener(v -> mediaInfo.performClick());
         track = new TextView(this);
         track.setTextColor(Color.WHITE); track.setTextSize(expanded ? 15 : 12); track.setMaxLines(1);
+        track.setClickable(true);
+        track.setOnClickListener(v -> mediaInfo.performClick());
         track.setEllipsize(android.text.TextUtils.TruncateAt.END);
         artist = new TextView(this);
         artist.setTextColor(Color.rgb(166, 166, 178)); artist.setTextSize(expanded ? 12 : 10); artist.setMaxLines(1);
+        artist.setClickable(true);
+        artist.setOnClickListener(v -> mediaInfo.performClick());
         artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(track, new LinearLayout.LayoutParams(-1, -2));
         labels.addView(artist, new LinearLayout.LayoutParams(-1, -2));
