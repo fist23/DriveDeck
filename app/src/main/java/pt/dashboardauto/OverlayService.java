@@ -165,8 +165,8 @@ public class OverlayService extends Service {
             }
         });
         content.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 4 : 3), dp(expanded ? 8 : 4), dp(expanded ? 4 : 3));
-        boolean compactIsland = !expanded;
-        content.setBackground(compactIsland ? null : panelBackground());
+        boolean splitCompactIsland = !expanded && isCenterIslandPosition();
+        content.setBackground(splitCompactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
         musicInfoContainer = mediaContainer;
         LinearLayout mediaInfo = new LinearLayout(this);
@@ -266,7 +266,8 @@ public class OverlayService extends Service {
         });
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
-        int compactAvailableWidth = availableWidth;
+        int compactActionWidth = controlDp(42) + dp(4);
+        int compactAvailableWidth = Math.max(dp(1), availableWidth - compactActionWidth);
         int compactMediaWidth = callActive ? dp(220) : controlDp(42);
         int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(480), availableWidth);
         int minimumMediaWidth = Math.min(dp(expanded ? 280 : 42), expanded ? availableWidth : compactAvailableWidth);
@@ -274,7 +275,10 @@ public class OverlayService extends Service {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        if (compactIsland) controls.setVisibility(android.view.View.GONE);
+        if (splitCompactIsland) {
+            controls.setPadding(dp(2), 0, dp(2), 0);
+            controls.setBackground(compactCapsuleBackground());
+        }
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46));
         if (!expanded && isCenterIslandPosition()) {
             controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
@@ -283,7 +287,7 @@ public class OverlayService extends Service {
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte"};
         for (int i = 0; i < icons.length; i++) {
-            if (!expanded) continue;
+            if (!expanded && i != 1) continue;
             ImageButton b = actionButton(icons[i], descriptions[i], i == 1 || i == icons.length - 1);
             if (i == 1) {
                 playButton = b;
@@ -496,6 +500,14 @@ public class OverlayService extends Service {
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
                     Color.rgb(20, 22, 30), Color.rgb(8, 9, 14)});
         background.setCornerRadius(dp(expanded ? 14 : 100));
+        return background;
+    }
+
+    private GradientDrawable compactCapsuleBackground() {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(5, 6, 9));
+        background.setCornerRadius(dp(24));
+        background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
     }
 
