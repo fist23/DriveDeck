@@ -47,6 +47,7 @@ public class OverlayService extends Service {
     private FrameLayout overlay;
     private TextView track;
     private TextView artist;
+    private android.view.View musicLabelsContainer;
     private TextView timeLabel;
     private ImageView artwork;
     private android.view.View musicInfoContainer;
@@ -90,7 +91,7 @@ public class OverlayService extends Service {
     private final Runnable refreshTrack = new Runnable() {
         @Override public void run() {
             updateTrack();
-            refreshHandler.postDelayed(this, 2000);
+            refreshHandler.postDelayed(this, 1000);
         }
     };
 
@@ -192,7 +193,7 @@ public class OverlayService extends Service {
                 toggleExpanded();
             }
         });
-        content.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 10 : 3), dp(expanded ? 12 : 4), dp(expanded ? 10 : 3));
+        content.setPadding(dp(expanded ? 16 : 4), dp(expanded ? 14 : 3), dp(expanded ? 16 : 4), dp(expanded ? 14 : 3));
         boolean splitCompactIsland = !expanded && isCenterIslandPosition();
         content.setBackground(splitCompactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
@@ -200,7 +201,7 @@ public class OverlayService extends Service {
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
-        mediaInfo.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 8 : 3), dp(expanded ? 10 : 4), dp(expanded ? 8 : 3));
+        mediaInfo.setPadding(dp(expanded ? 14 : 4), dp(expanded ? 12 : 3), dp(expanded ? 14 : 4), dp(expanded ? 12 : 3));
         mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
         mediaInfo.setOnClickListener(v -> {
             if (!expanded) toggleExpanded();
@@ -235,7 +236,7 @@ public class OverlayService extends Service {
                 outline.setOval(0, 0, view.getWidth(), view.getHeight());
             }
         });
-        int artworkSize = controlDp(expanded ? 58 : 28);
+        int artworkSize = controlDp(expanded ? 64 : 28);
         mediaInfo.addView(artwork, new LinearLayout.LayoutParams(artworkSize, artworkSize));
         if (!expanded && !callActive) {
             // Reserva física para o punch-hole. A capa e as ondas ficam em
@@ -249,6 +250,7 @@ public class OverlayService extends Service {
             updateCompactWave(playingState);
         }
         LinearLayout labels = new LinearLayout(this);
+        musicLabelsContainer = labels;
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL);
         labels.setPadding(dp(8), 0, 0, 0);
@@ -324,12 +326,12 @@ public class OverlayService extends Service {
         int expandedMaxWidth = Math.min(dp(520), availableWidth);
         int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : expandedMaxWidth;
         int minimumMediaWidth = Math.min(dp(expanded ? 320 : 42), expanded ? availableWidth : compactAvailableWidth);
-        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 112 : 42)));
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 132 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
         if (!expanded || callActive) controls.setVisibility(android.view.View.GONE);
-        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46));
+        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(expanded ? -1 : -2, controlDp(expanded ? 82 : 46));
         if (!expanded && isCenterIslandPosition()) {
             controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
         }
@@ -359,7 +361,7 @@ public class OverlayService extends Service {
         }
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
-        int compactWindowWidth = Math.min(dp(224), compactAvailableWidth);
+        int compactWindowWidth = Math.min(dp(300), compactAvailableWidth);
         overlay.addView(content, new FrameLayout.LayoutParams(
                 expanded ? -2 : compactWindowWidth, -2, Gravity.TOP | Gravity.START));
         overlay.setOnTouchListener((view, event) -> {
@@ -492,22 +494,37 @@ public class OverlayService extends Service {
                     // a entrada. Escalar o conteúdo antes de o alinhar fazia o
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
-                    content.setScaleX(effectiveScale);
-                    content.setScaleY(effectiveScale);
-                    content.setAlpha(expanded ? .94f : 1f);
+                    content.setScaleX(expanded ? .94f : .62f);
+                    content.setScaleY(expanded ? .80f : .62f);
+                    content.setTranslationY(expanded ? -dp(20) : dp(12));
+                    content.setAlpha(0f);
+                    if (!expanded) {
+                        // A pill está no lado direito da caixa fixa. O pivô
+                        // mantém a animação centrada nela, e não no espaço
+                        // transparente usado para revelar o título.
+                        content.setPivotX(Math.max(0f, baseOverlayWidth - compactIslandWidth() / 2f));
+                        content.setPivotY(baseOverlayHeight / 2f);
+                    }
                     overlay.setPivotX(baseOverlayWidth / 2f);
                     overlay.setPivotY(0f);
                     overlay.setScaleX(1f);
-                    overlay.setScaleY(1f);
+                    overlay.setScaleY(expanded ? .90f : .88f);
+                    overlay.setTranslationY(expanded ? -dp(8) : dp(12));
                     alignIslandToCutout();
                     clampOverlayPosition();
                     content.animate()
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .translationY(0f)
                             .alpha(1f)
-                            .setInterpolator(new OvershootInterpolator(1.08f))
-                            .setDuration(expanded ? 360 : 260)
+                            .setInterpolator(new OvershootInterpolator(expanded ? 1.25f : 1.45f))
+                            .setDuration(expanded ? 360 : 420)
                             .start();
                     overlay.animate()
                             .alpha(1f)
+                            .scaleX(1f)
+                            .scaleY(1f)
+                            .translationY(0f)
                             .setInterpolator(new DecelerateInterpolator(1.4f))
                             .setDuration(expanded ? 340 : 240)
                             .start();
@@ -577,7 +594,7 @@ public class OverlayService extends Service {
                     Color.rgb(27, 29, 39),
                     Color.rgb(7, 8, 13),
                     Color.rgb(22, 24, 34)});
-        background.setCornerRadius(dp(expanded ? 22 : 100));
+        background.setCornerRadius(dp(expanded ? 34 : 100));
         background.setStroke(expanded ? dp(1) : dp(1), expanded
                 ? Color.argb(55, 255, 255, 255)
                 : Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
@@ -778,7 +795,7 @@ public class OverlayService extends Service {
 
         final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
         final int compactWidth = Math.max(1, mediaParams.width > 0 ? mediaParams.width : compactIslandWidth());
-        final int expandedWidth = Math.min(dp(224), Math.max(compactWidth, playerContent.getWidth()));
+        final int expandedWidth = Math.min(dp(292), Math.max(compactWidth, playerContent.getWidth()));
         if (expandedWidth <= compactWidth + dp(12)) {
             renderTrack(value);
             finishTrackAnimation(animationToken, value);
@@ -787,6 +804,9 @@ public class OverlayService extends Service {
         final int compactMediaWidth = mediaParams.width;
         final int compactTrackVisibility = track.getVisibility();
         final int compactArtistVisibility = artist.getVisibility();
+        final int compactLabelsVisibility = musicLabelsContainer == null
+                ? android.view.View.GONE : musicLabelsContainer.getVisibility();
+        if (musicLabelsContainer != null) musicLabelsContainer.setVisibility(android.view.View.VISIBLE);
         track.setVisibility(android.view.View.VISIBLE);
         artist.setVisibility(android.view.View.VISIBLE);
         track.setTextSize(11);
@@ -838,6 +858,7 @@ public class OverlayService extends Service {
                             artist.setTextSize(10);
                             track.setVisibility(compactTrackVisibility);
                             artist.setVisibility(compactArtistVisibility);
+                            if (musicLabelsContainer != null) musicLabelsContainer.setVisibility(compactLabelsVisibility);
                             finishTrackAnimation(animationToken, value);
                         }
                     });
@@ -1093,9 +1114,9 @@ public class OverlayService extends Service {
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        int size = controlDp(expanded ? 64 : 42);
+        int size = controlDp(expanded ? 68 : 42);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
-        int margin = controlDp(expanded ? 5 : 2);
+        int margin = controlDp(expanded ? 10 : 2);
         params.setMargins(margin, margin, margin, margin);
         return params;
     }
@@ -1300,6 +1321,7 @@ public class OverlayService extends Service {
         overlay = null;
         track = null;
         artist = null;
+        musicLabelsContainer = null;
         timeLabel = null;
         progressBar = null;
         compactProgressBar = null;
@@ -1352,11 +1374,11 @@ public class OverlayService extends Service {
         overlay.setPivotY(0f);
         overlay.animate()
                 .alpha(0f)
-                .scaleX(nextState ? .98f : .96f)
-                .scaleY(nextState ? .98f : .96f)
-                .translationY(nextState ? -dp(2) : -dp(1))
+                .scaleX(nextState ? .92f : .94f)
+                .scaleY(nextState ? .90f : .92f)
+                .translationY(nextState ? -dp(10) : -dp(18))
                 .setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator())
-                .setDuration(nextState ? 175 : 190)
+                .setDuration(nextState ? 210 : 230)
                 .withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();
