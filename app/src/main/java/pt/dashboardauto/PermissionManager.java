@@ -12,6 +12,7 @@ public final class PermissionManager {
     public static final int REQUEST_BLUETOOTH = 41;
     public static final int REQUEST_NOTIFICATIONS = 42;
     public static final int REQUEST_PHONE_STATE = 43;
+    public static final int REQUEST_CONTACTS = 44;
 
     private PermissionManager() { }
 
@@ -39,6 +40,14 @@ public final class PermissionManager {
 
     public static void requestPhoneState(Activity activity) {
         if (!canReadPhoneState(activity)) activity.requestPermissions(new String[]{"android.permission.READ_PHONE_STATE"}, REQUEST_PHONE_STATE);
+    }
+
+    public static boolean canReadContacts(Context context) {
+        return context.checkSelfPermission("android.permission.READ_CONTACTS") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    public static void requestContacts(Activity activity) {
+        if (!canReadContacts(activity)) activity.requestPermissions(new String[]{"android.permission.READ_CONTACTS"}, REQUEST_CONTACTS);
     }
 
     public static boolean isMediaAccessEnabled(Context context) {
