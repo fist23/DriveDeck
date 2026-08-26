@@ -754,39 +754,91 @@ public class OverlayService extends Service {
         pendingTrackValue = null;
         final int animationToken = ++trackAnimationToken;
         final android.view.View transitionContainer = musicInfoContainer;
+        if (windowParams == null || playerContent == null) {
+            renderTrack(value);
+            finishTrackAnimation(animationToken, value);
+            return;
+        }
         transitionContainer.animate().cancel();
         if (artwork != null) artwork.animate().cancel();
 
-        // A ilha compacta não muda de largura durante a troca. Alterar os
-        // bounds da janela a cada frame fazia o sistema reposicionar o overlay
-        // relativamente ao punch-hole, provocando saltos e clipping lateral.
-        transitionContainer.setPivotX(transitionContainer.getWidth() / 2f);
-        transitionContainer.setPivotY(transitionContainer.getHeight() / 2f);
-        transitionContainer.setScaleX(1f);
-        transitionContainer.setScaleY(1f);
-        transitionContainer.setAlpha(1f);
-        transitionContainer.animate()
-                .scaleX(.90f)
-                .scaleY(.90f)
-                .alpha(.18f)
-                .setDuration(145L)
-                .setInterpolator(new DecelerateInterpolator(1.6f))
-                .withEndAction(() -> {
+        final int compactWidth = Math.max(1, windowParams.width);
+        final int rightEdge = windowParams.x + compactWidth;
+        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        final int expandedWidth = Math.min(dp(224), Math.min(screenWidth - dp(16), rightEdge - dp(8)));
+        if (expandedWidth <= compactWidth + dp(12)) {
+            renderTrack(value);
+            finishTrackAnimation(animationToken, value);
+            return;
+        }
+        final int compactX = windowParams.x;
+        final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
+        final android.view.ViewGroup.LayoutParams contentParams = playerContent.getLayoutParams();
+        final int compactMediaWidth = mediaParams.width;
+        final int compactContentWidth = contentParams.width;
+        final int compactTrackVisibility = track.getVisibility();
+        final int compactArtistVisibility = artist.getVisibility();
+        track.setVisibility(android.view.View.VISIBLE);
+        artist.setVisibility(android.view.View.VISIBLE);
+        track.setTextSize(11);
+        artist.setTextSize(9);
+        track.setAlpha(0f);
+        artist.setAlpha(0f);
+        renderTrack(value);
+
+        // O lado direito fica fixo e a largura cresce para a esquerda. Assim a
+        // animação mostra o título sem reancorar a ilha sobre a câmara.
+        android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactWidth, expandedWidth);
+        opening.setDuration(280L);
+        opening.setInterpolator(new DecelerateInterpolator(1.45f));
+        opening.addUpdateListener(animation -> {
+            int width = (Integer) animation.getAnimatedValue();
+            mediaParams.width = width;
+            contentParams.width = width;
+            transitionContainer.setLayoutParams(mediaParams);
+            playerContent.setLayoutParams(contentParams);
+            updateCompactTrackWindowAt(width, rightEdge - width);
+        });
+        opening.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                track.animate().alpha(1f).setDuration(170L).start();
+                artist.animate().alpha(1f).setDuration(170L).start();
+                refreshHandler.postDelayed(() -> {
                     if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
-                    renderTrack(value);
-                    transitionContainer.setScaleX(1.06f);
-                    transitionContainer.setScaleY(1.06f);
-                    transitionContainer.setAlpha(.18f);
-                    transitionContainer.animate()
-                            .scaleX(1f)
-                            .scaleY(1f)
-                            .alpha(1f)
-                            .setDuration(420L)
-                            .setInterpolator(new OvershootInterpolator(1.15f))
-                            .withEndAction(() -> finishTrackAnimation(animationToken, value))
-                            .start();
-                })
-                .start();
+                    android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(expandedWidth, compactWidth);
+                    closing.setDuration(300L);
+                    closing.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+                    closing.addUpdateListener(closeAnimation -> {
+                        int width = (Integer) closeAnimation.getAnimatedValue();
+                        mediaParams.width = width;
+                        contentParams.width = width;
+                        transitionContainer.setLayoutParams(mediaParams);
+                        playerContent.setLayoutParams(contentParams);
+                        updateCompactTrackWindowAt(width, rightEdge - width);
+                    });
+                    closing.addListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override public void onAnimationEnd(android.animation.Animator animation) {
+                            if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
+                            mediaParams.width = compactMediaWidth;
+                            contentParams.width = compactContentWidth;
+                            transitionContainer.setLayoutParams(mediaParams);
+                            playerContent.setLayoutParams(contentParams);
+                            updateCompactTrackWindowAt(compactWidth, compactX);
+                            track.setAlpha(1f);
+                            artist.setAlpha(1f);
+                            track.setTextSize(12);
+                            artist.setTextSize(10);
+                            track.setVisibility(compactTrackVisibility);
+                            artist.setVisibility(compactArtistVisibility);
+                            finishTrackAnimation(animationToken, value);
+                        }
+                    });
+                    closing.start();
+                }, 1050L);
+            }
+        });
+        opening.start();
     }
 
     private void finishTrackAnimation(int animationToken, String value) {
@@ -797,6 +849,14 @@ public class OverlayService extends Service {
             pendingTrackValue = null;
             animateCompactTrackChange(next);
         }
+    }
+
+    private void updateCompactTrackWindowAt(int width, int x) {
+        if (windowParams == null || manager == null || overlay == null) return;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        windowParams.width = Math.max(1, Math.min(width, screenWidth - dp(8)));
+        windowParams.x = Math.max(dp(4), Math.min(x, screenWidth - windowParams.width - dp(4)));
+        try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
 
     /**
@@ -1314,11 +1374,11 @@ public class OverlayService extends Service {
         overlay.setPivotY(0f);
         overlay.animate()
                 .alpha(0f)
-                .scaleX(nextState ? 1.04f : .90f)
-                .scaleY(nextState ? .72f : .90f)
-                .translationY(nextState ? -dp(2) : -dp(4))
-                .setInterpolator(new DecelerateInterpolator(1.5f))
-                .setDuration(nextState ? 135 : 170)
+                .scaleX(nextState ? .98f : .96f)
+                .scaleY(nextState ? .98f : .96f)
+                .translationY(nextState ? -dp(2) : -dp(1))
+                .setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator())
+                .setDuration(nextState ? 175 : 190)
                 .withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();
