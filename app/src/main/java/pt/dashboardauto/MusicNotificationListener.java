@@ -6,4 +6,16 @@ package pt.dashboardauto;
  * text yet; it is only the user's explicit bridge to media controls.
  */
 public class MusicNotificationListener extends android.service.notification.NotificationListenerService {
+    @Override public void onListenerConnected() {
+        super.onListenerConnected();
+        OverlayService.requestMediaRefresh();
+    }
+
+    @Override public void onNotificationPosted(android.service.notification.StatusBarNotification notification) {
+        OverlayService.requestMediaRefresh();
+    }
+
+    @Override public void onNotificationRemoved(android.service.notification.StatusBarNotification notification) {
+        OverlayService.requestMediaRefresh();
+    }
 }

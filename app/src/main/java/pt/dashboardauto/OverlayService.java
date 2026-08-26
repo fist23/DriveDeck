@@ -35,6 +35,7 @@ import android.content.res.Configuration;
 
 public class OverlayService extends Service {
     private static volatile boolean active;
+    private static volatile OverlayService runningService;
     // Permite compactar o player para libertar espaço, mantendo sempre os
     // controlos utilizáveis durante a condução.
     private static final String ACTION_CLOSE_PLAYER = "pt.dashboardauto.action.CLOSE_PLAYER";
@@ -52,6 +53,8 @@ public class OverlayService extends Service {
     private Bitmap renderedArtwork;
     private ImageButton playButton;
     private AnimatedWaveDrawable playingDrawable;
+    private ImageView compactWave;
+    private AnimatedWaveDrawable compactWaveDrawable;
     private SeekBar progressBar;
     private android.widget.ProgressBar compactProgressBar;
     private long durationMs;
@@ -76,6 +79,7 @@ public class OverlayService extends Service {
     };
     private long optimisticPlaybackUntil;
     private boolean expanded;
+    private boolean expandedBeforeCall;
     private boolean miniPlayerHidden;
     private WindowManager.LayoutParams windowParams;
     private android.view.View playerContent;
@@ -93,6 +97,7 @@ public class OverlayService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         active = true;
+        runningService = this;
         // Cada sessão começa como uma Dynamic Island compacta. A expansão é
         // temporária e acontece apenas por interação direta do utilizador.
         expanded = false;
@@ -113,7 +118,13 @@ public class OverlayService extends Service {
         }
         if (intent != null && ACTION_CALL_STATE.equals(intent.getAction())) {
             boolean activeCall = intent.getBooleanExtra("call_active", false);
-            if (activeCall && !callActive) callStartedAt = android.os.SystemClock.elapsedRealtime();
+            boolean callWasActive = callActive;
+            if (activeCall && !callWasActive) {
+                callStartedAt = android.os.SystemClock.elapsedRealtime();
+                expandedBeforeCall = expanded;
+                expanded = false;
+            }
+            if (!activeCall && callWasActive) expanded = expandedBeforeCall;
             if (activeCall) callNumber = intent.getStringExtra("call_number");
             callActive = activeCall;
             if (!callActive) {
@@ -147,8 +158,25 @@ public class OverlayService extends Service {
         return START_NOT_STICKY;
     }
 
+    static void rebuildIfActive(android.content.Context context) {
+        if (!active) return;
+        Intent rebuild = new Intent(context, OverlayService.class).setAction(ACTION_REBUILD_LAYOUT);
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(rebuild);
+            else context.startService(rebuild);
+        } catch (RuntimeException ignored) { }
+    }
+
+    static void requestMediaRefresh() {
+        OverlayService service = runningService;
+        if (service == null) return;
+        service.refreshHandler.removeCallbacks(service.refreshTrack);
+        service.refreshHandler.post(service.refreshTrack);
+    }
+
     private void addOverlay() {
-        manager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        WindowManager accessibilityManager = DriveDeckAccessibilityService.overlayWindowManager();
+        manager = accessibilityManager != null ? accessibilityManager : (WindowManager) getSystemService(WINDOW_SERVICE);
         baseOverlayWidth = 0;
         baseOverlayHeight = 0;
         overlay = new FrameLayout(this);
@@ -164,7 +192,7 @@ public class OverlayService extends Service {
                 toggleExpanded();
             }
         });
-        content.setPadding(dp(expanded ? 8 : 4), dp(expanded ? 4 : 3), dp(expanded ? 8 : 4), dp(expanded ? 4 : 3));
+        content.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 10 : 3), dp(expanded ? 12 : 4), dp(expanded ? 10 : 3));
         boolean splitCompactIsland = !expanded && isCenterIslandPosition();
         content.setBackground(splitCompactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
@@ -179,17 +207,47 @@ public class OverlayService extends Service {
             else openConfigured("music_app");
         });
         mediaInfo.setClickable(true);
-        // Não consumir o MotionEvent aqui: o listener anterior interceptava a
-        // sequência de toque da pill e, em alguns dispositivos, impedia que o
-        // OnClick fosse entregue. O ripple/estado pressed nativo mantém o
-        // feedback visual sem roubar o gesto de expansão.
+        mediaInfo.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                view.setPressed(true);
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP) {
+                view.setPressed(false);
+                if (!expanded) toggleExpanded(); else openConfigured("music_app");
+                return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                view.setPressed(false);
+                return true;
+            }
+            return true;
+        });
         artwork = new ImageView(this);
         artwork.setClickable(true);
         artwork.setOnClickListener(v -> mediaInfo.performClick());
         artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.setBackgroundColor(Color.rgb(65, 27, 40));
+        artwork.setClipToOutline(true);
+        artwork.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(android.view.View view, android.graphics.Outline outline) {
+                outline.setOval(0, 0, view.getWidth(), view.getHeight());
+            }
+        });
         int artworkSize = controlDp(expanded ? 58 : 28);
         mediaInfo.addView(artwork, new LinearLayout.LayoutParams(artworkSize, artworkSize));
+        if (!expanded && !callActive) {
+            // Reserva física para o punch-hole. A capa e as ondas ficam em
+            // lados opostos do recorte, em vez de encobrirem a câmara.
+            android.widget.Space spacer = new android.widget.Space(this);
+            mediaInfo.addView(spacer, new LinearLayout.LayoutParams(cutoutGapWidth(), 1));
+            compactWave = new ImageView(this);
+            compactWave.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+            compactWave.setPadding(dp(2), dp(2), dp(2), dp(2));
+            mediaInfo.addView(compactWave, new LinearLayout.LayoutParams(dp(32), dp(32)));
+            updateCompactWave(playingState);
+        }
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL);
@@ -246,14 +304,6 @@ public class OverlayService extends Service {
         // revealed only after the user opens the player.
         labels.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
         mediaInfo.addView(labels, new LinearLayout.LayoutParams(0, -1, 1f));
-        if (expanded) {
-            ImageButton expandButton = actionButton(R.drawable.ic_collapse, "Recolher player", true);
-            expandButton.setOnClickListener(v -> {
-                v.animate().rotationBy(-180f).setDuration(180).start();
-                toggleExpanded();
-            });
-            mediaInfo.addView(expandButton, mediaButtonParams());
-        }
         if (callActive) {
             mediaInfo.removeAllViews();
             addCallInfo(mediaInfo, expanded);
@@ -266,19 +316,18 @@ public class OverlayService extends Service {
         });
         mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
-        int compactActionWidth = controlDp(42) + dp(4);
-        int compactAvailableWidth = Math.max(dp(1), availableWidth - compactActionWidth);
-        int compactMediaWidth = callActive ? dp(220) : controlDp(42);
-        int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(480), availableWidth);
+        int compactAvailableWidth = availableWidth;
+        // A pill compacta acompanha o recorte, sem duplicar o indicador de música.
+        // 112dp deixa espaço equilibrado para a capa e para as ondas nos ecrãs
+        // com punch-hole, mantendo a janela tocável e sem ocupar o topo todo.
+        int compactMediaWidth = callActive ? dp(180) : compactIslandWidth();
+        int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(318), availableWidth);
         int minimumMediaWidth = Math.min(dp(expanded ? 280 : 42), expanded ? availableWidth : compactAvailableWidth);
-        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 108 : 42)));
+        content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 112 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
-        if (splitCompactIsland) {
-            controls.setPadding(dp(2), 0, dp(2), 0);
-            controls.setBackground(compactCapsuleBackground());
-        }
+        if (!expanded || callActive) controls.setVisibility(android.view.View.GONE);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-2, controlDp(expanded ? 72 : 46));
         if (!expanded && isCenterIslandPosition()) {
             controlsParams.setMargins(cutoutGapWidth(), 0, 0, 0);
@@ -287,8 +336,10 @@ public class OverlayService extends Service {
         int[] icons = new int[]{R.drawable.ic_skip_previous, R.drawable.ic_play, R.drawable.ic_skip_next};
         String[] descriptions = {"Faixa anterior", "Reproduzir ou pausar", "Faixa seguinte"};
         for (int i = 0; i < icons.length; i++) {
-            if (!expanded && i != 1) continue;
-            ImageButton b = actionButton(icons[i], descriptions[i], i == 1 || i == icons.length - 1);
+            if (!expanded || callActive) continue;
+            ImageButton b = expanded
+                    ? expandedControlButton(icons[i], descriptions[i], i == 1)
+                    : actionButton(icons[i], descriptions[i], i == 1 || i == icons.length - 1);
             if (i == 1) {
                 playButton = b;
                 setPlayButtonState(playingState, false);
@@ -297,8 +348,8 @@ public class OverlayService extends Service {
             b.setOnClickListener(v -> handleAction(actionIndex));
             controls.addView(b, buttonParams());
         }
-        if (callActive && !expanded) controls.setVisibility(android.view.View.GONE);
-        if (expanded) {
+        if (callActive) controls.setVisibility(android.view.View.GONE);
+        if (expanded && !callActive) {
             LinearLayout extra = new LinearLayout(this);
             extra.setOrientation(LinearLayout.HORIZONTAL);
             extra.setGravity(Gravity.CENTER);
@@ -308,6 +359,35 @@ public class OverlayService extends Service {
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
         overlay.addView(content, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
+        overlay.setOnTouchListener((view, event) -> {
+            if (expanded && event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
+                toggleExpanded();
+                return true;
+            }
+            return false;
+        });
+        if (!expanded) {
+            // O alvo transparente torna toda a pill minimizada tocável, mesmo
+            // quando a capa/estado do player muda. Em modo expandido não existe
+            // este alvo, por isso os controlos mantêm os seus próprios toques.
+            android.view.View compactTapTarget = new android.view.View(this);
+            compactTapTarget.setClickable(true);
+            compactTapTarget.setBackgroundColor(Color.argb(1, 0, 0, 0));
+            compactTapTarget.setContentDescription("Expandir player");
+            compactTapTarget.setOnTouchListener((v, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    v.performClick();
+                    return true;
+                }
+                return true;
+            });
+            compactTapTarget.setOnClickListener(v -> {
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY);
+                android.util.Log.d("DriveDeckIsland", "compact tap -> expand");
+                toggleExpanded();
+            });
+            overlay.addView(compactTapTarget, new FrameLayout.LayoutParams(compactIslandWidth(), dp(42), Gravity.TOP | Gravity.START));
+        }
         playerContent = content;
         content.addOnLayoutChangeListener((view, left, top, right, bottom,
                                             oldLeft, oldTop, oldRight, oldBottom) -> {
@@ -333,6 +413,7 @@ public class OverlayService extends Service {
         content.setScaleX(requestedScale);
         content.setScaleY(requestedScale);
         int overlayFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        if (expanded) overlayFlags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
         if (isCenterIslandPosition()) {
             // A Dynamic Island must occupy the display area behind the status
             // bar/cutout. Without these flags Android repositions overlays
@@ -340,7 +421,10 @@ public class OverlayService extends Service {
             overlayFlags |= WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                     | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
         }
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, overlayFlags, PixelFormat.TRANSLUCENT);
+        int overlayType = DriveDeckAccessibilityService.isConnected()
+                ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                : WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, overlayType, overlayFlags, PixelFormat.TRANSLUCENT);
         if (android.os.Build.VERSION.SDK_INT >= 28) {
             params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         }
@@ -472,15 +556,17 @@ public class OverlayService extends Service {
     private GradientDrawable panelBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
-                    blendColor(accentColor(), Color.BLACK, .42f),
-                    Color.rgb(18, 25, 58),
-                    Color.rgb(7, 8, 17)})
+                    Color.rgb(7, 7, 9),
+                    Color.rgb(0, 0, 0),
+                    Color.rgb(20, 8, 13)})
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
                     Color.rgb(27, 29, 39),
                     Color.rgb(7, 8, 13),
                     Color.rgb(22, 24, 34)});
         background.setCornerRadius(dp(expanded ? 22 : 100));
-        background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
+        background.setStroke(expanded ? dp(1) : dp(1), expanded
+                ? Color.argb(90, 255, 255, 255)
+                : Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
     }
 
@@ -496,19 +582,36 @@ public class OverlayService extends Service {
     private GradientDrawable mediaBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
-                    Color.rgb(42, 42, 52), Color.rgb(22, 23, 31)})
+                    Color.TRANSPARENT, Color.TRANSPARENT})
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
-                    Color.rgb(20, 22, 30), Color.rgb(8, 9, 14)});
+                    Color.BLACK, Color.rgb(3, 4, 7)});
         background.setCornerRadius(dp(expanded ? 14 : 100));
         return background;
     }
 
-    private GradientDrawable compactCapsuleBackground() {
+    private ImageButton expandedControlButton(int icon, String description, boolean primary) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setColorFilter(primary ? Color.BLACK : Color.WHITE);
+        button.setContentDescription(description);
+        button.setTooltipText(description);
+        button.setPadding(dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12));
+        button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(5, 6, 9));
-        background.setCornerRadius(dp(24));
-        background.setStroke(dp(1), Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
-        return background;
+        background.setColor(primary ? Color.WHITE : Color.TRANSPARENT);
+        background.setShape(GradientDrawable.OVAL);
+        button.setBackground(rippleBackground(background, Color.argb(70, 255, 255, 255)));
+        button.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                view.animate().scaleX(.9f).scaleY(.9f).setDuration(70).start();
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                view.animate().scaleX(1f).scaleY(1f).setDuration(130).start();
+                if (event.getAction() == MotionEvent.ACTION_UP) view.performClick();
+            }
+            return true;
+        });
+        return button;
     }
 
     private RippleDrawable rippleBackground(GradientDrawable content, int rippleColor) {
@@ -520,10 +623,11 @@ public class OverlayService extends Service {
         String value = MusicController.currentTrack(this);
         boolean trackChanged = lastTrackValue != null && !lastTrackValue.equals(value);
         lastTrackValue = value;
-        if (trackChanged) animateTrackChange(value); else renderTrack(value);
+        if (trackChanged) animateTrackChange(value); else renderTrack(value, false);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
         setPlayButtonState(playingState, false);
+        updateCompactWave(playingState);
         durationMs = playback.durationMs;
         if (progressBar != null && !userSeeking) {
             progressBar.setEnabled(durationMs > 0);
@@ -538,6 +642,21 @@ public class OverlayService extends Service {
         updateCallUi();
     }
 
+    private void updateCompactWave(boolean playing) {
+        if (compactWave == null) return;
+        if (!playing) {
+            if (compactWaveDrawable != null) compactWaveDrawable.stop();
+            compactWaveDrawable = null;
+            compactWave.setImageDrawable(null);
+            compactWave.setVisibility(android.view.View.INVISIBLE);
+            return;
+        }
+        compactWave.setVisibility(android.view.View.VISIBLE);
+        compactWave.setColorFilter(null);
+        if (compactWaveDrawable == null) compactWaveDrawable = new AnimatedWaveDrawable(Color.rgb(65, 225, 90));
+        compactWave.setImageDrawable(compactWaveDrawable);
+    }
+
     private void updateCallUi() {
         if (!callActive || callDuration == null) return;
         long elapsed = Math.max(0L, android.os.SystemClock.elapsedRealtime() - callStartedAt) / 1000L;
@@ -545,6 +664,10 @@ public class OverlayService extends Service {
     }
 
     private void renderTrack(String value) {
+        renderTrack(value, true);
+    }
+
+    private void renderTrack(String value, boolean refreshArtwork) {
         if (track == null) return;
         String[] parts = value.split("\\n", 2);
         boolean hasTrack = parts.length > 0 && !parts[0].isBlank() && !"Sem música ativa".equals(parts[0]);
@@ -555,7 +678,7 @@ public class OverlayService extends Service {
                     ? "A tocar: " + parts[0] + (parts.length > 1 ? ", por " + parts[1] : "")
                     : "Sem música ativa. Toque para escolher áudio");
         }
-        if (artwork != null) {
+        if (artwork != null && (refreshArtwork || artwork.getDrawable() == null)) {
             Bitmap bitmap = MusicController.currentArtwork(this);
             if (bitmap != renderedArtwork || artwork.getDrawable() == null) {
                 renderedArtwork = bitmap;
@@ -871,6 +994,12 @@ public class OverlayService extends Service {
         callArtwork = new ImageView(this);
         callArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
         callArtwork.setBackground(mediaBackground());
+        callArtwork.setClipToOutline(true);
+        callArtwork.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override public void getOutline(android.view.View view, android.graphics.Outline outline) {
+                outline.setOval(0, 0, view.getWidth(), view.getHeight());
+            }
+        });
         callArtwork.setImageResource(android.R.drawable.sym_action_call);
         android.graphics.Bitmap contactPhoto = loadContactPhoto(callNumber);
         if (contactPhoto != null) callArtwork.setImageBitmap(contactPhoto);
@@ -958,6 +1087,7 @@ public class OverlayService extends Service {
             ImageButton endCall = actionButton(R.drawable.ic_close, "Desligar chamada", true);
             endCall.setOnClickListener(v -> endCurrentCall());
             parent.addView(endCall, secondaryButtonParams());
+            return;
         }
         ImageButton navigation = actionButton(R.drawable.ic_map, "Abrir navegação", false);
         navigation.setOnClickListener(v -> openConfigured("navigation_app"));
@@ -1035,6 +1165,12 @@ public class OverlayService extends Service {
         android.graphics.Rect selected = centralCutout();
         if (selected == null) return dp(16);
         return Math.max(dp(18), Math.min(dp(96), selected.width() + dp(12)));
+    }
+
+    private int compactIslandWidth() {
+        // Espaço simétrico: capa, recorte real da câmara e ondas. A largura
+        // adapta-se ao dispositivo, mas mantém controlos suficientemente grandes.
+        return controlDp(28) + cutoutGapWidth() + dp(32) + dp(8);
     }
 
     private android.view.DisplayCutout displayCutout() {
@@ -1179,6 +1315,9 @@ public class OverlayService extends Service {
         renderedArtwork = null;
         if (playingDrawable != null) playingDrawable.stop();
         playingDrawable = null;
+        if (compactWaveDrawable != null) compactWaveDrawable.stop();
+        compactWaveDrawable = null;
+        compactWave = null;
         playButton = null;
         windowParams = null;
         lastTrackValue = null;
@@ -1209,7 +1348,11 @@ public class OverlayService extends Service {
 
     private void toggleExpanded() {
         boolean nextState = !expanded;
-        if (overlay == null || layoutTransitionRunning) return;
+        if (overlay == null || layoutTransitionRunning) {
+            android.util.Log.w("DriveDeckIsland", "toggle ignored overlay=" + (overlay != null) + " transition=" + layoutTransitionRunning);
+            return;
+        }
+        android.util.Log.d("DriveDeckIsland", "toggle expanded=" + expanded + " next=" + nextState);
         layoutTransitionRunning = true;
         overlay.setPivotX(overlay.getWidth() / 2f);
         overlay.setPivotY(0f);
@@ -1385,6 +1528,7 @@ public class OverlayService extends Service {
     @Override public void onDestroy() {
         removeOverlay();
         active = false;
+        if (runningService == this) runningService = null;
         super.onDestroy();
     }
     public static boolean isActive() { return active; }

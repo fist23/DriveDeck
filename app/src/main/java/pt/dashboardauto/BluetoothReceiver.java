@@ -31,8 +31,16 @@ public class BluetoothReceiver extends BroadcastReceiver {
         // O estado de ligação é útil para chamadas mesmo quando a abertura
         // automática do Car Mode está desligada.
         preferences.edit().putBoolean("selected_bluetooth_connected", connected).apply();
-        if (!preferences.getBoolean("auto_bluetooth", false)) { Log.d("DriveDeckBT", "Auto Bluetooth desativado"); return; }
-        if (!PermissionManager.canDrawOverlay(context) || !PermissionManager.canConnectBluetooth(context)) { Log.w("DriveDeckBT", "Permissão de overlay/Bluetooth em falta"); return; }
+        boolean autoBluetooth = preferences.getBoolean("auto_bluetooth", false);
+        boolean closeOnDisconnect = preferences.getBoolean("close_on_bluetooth_disconnect", true);
+        if (!autoBluetooth && !(disconnected && closeOnDisconnect)) {
+            Log.d("DriveDeckBT", "Automação Bluetooth desativada");
+            return;
+        }
+        if (connected && (!PermissionManager.canDrawOverlay(context) || !PermissionManager.canConnectBluetooth(context))) {
+            Log.w("DriveDeckBT", "Permissão de overlay/Bluetooth em falta");
+            return;
+        }
         long now = System.currentTimeMillis();
         String eventKey = (connected ? "connected:" : "disconnected:") + device.getAddress();
         String previousEvent = preferences.getString("bluetooth_last_event", "");
@@ -51,6 +59,8 @@ public class BluetoothReceiver extends BroadcastReceiver {
                 }
                 if (latest.getBoolean("pause_music_on_bluetooth_disconnect", false)) MusicController.pause(context);
                 if (latest.getBoolean("close_on_bluetooth_disconnect", true)) {
+                    // Fecha a ilha, regressa ao Home e termina os processos de
+                    // navegação/música em segundo plano quando o Android permitir.
                     Intent closeEverything = new Intent(context, OverlayService.class)
                             .setAction(OverlayService.ACTION_CLOSE_EVERYTHING);
                     try {

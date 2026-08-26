@@ -136,8 +136,10 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun startCarMode() {
-        if (!PermissionManager.canDrawOverlay(this)) {
-            PermissionManager.openOverlaySettings(this)
+        val missing = missingPermissionLabels()
+        if (missing.isNotEmpty()) {
+            Toast.makeText(this, "Ativa primeiro: ${missing.joinToString(", ")}", Toast.LENGTH_LONG).show()
+            openFirstMissingPermission()
             return
         }
         val service = Intent(this, OverlayService::class.java).putExtra("launch_apps", true).putExtra("launch_mode", "car_mode")
@@ -145,6 +147,24 @@ class ComposeMainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service) else startService(service)
         } catch (_: RuntimeException) {
             Toast.makeText(this, "Não foi possível iniciar o Car Mode.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun missingPermissionLabels(): List<String> = buildList {
+        if (!PermissionManager.canDrawOverlay(this@ComposeMainActivity)) add("overlay")
+        if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) add("Bluetooth")
+        if (!PermissionManager.canPostNotifications(this@ComposeMainActivity)) add("notificações")
+        if (!PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) add("controlos de música")
+        if (!PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) add("toque na Dynamic Island")
+    }
+
+    private fun openFirstMissingPermission() {
+        when {
+            !PermissionManager.canDrawOverlay(this) -> PermissionManager.openOverlaySettings(this)
+            !PermissionManager.canConnectBluetooth(this) -> PermissionManager.requestBluetooth(this)
+            !PermissionManager.canPostNotifications(this) -> PermissionManager.requestNotifications(this)
+            !PermissionManager.isMediaAccessEnabled(this) -> PermissionManager.openMediaSettings(this)
+            !PermissionManager.isIslandAccessibilityEnabled(this) -> PermissionManager.openAccessibilitySettings(this)
         }
     }
 
@@ -304,6 +324,7 @@ class ComposeMainActivity : ComponentActivity() {
                 PermissionButton("Fotos dos contactos", PermissionManager.canReadContacts(this@ComposeMainActivity)) { PermissionManager.requestContacts(this@ComposeMainActivity) }
                 PermissionButton("Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
                 PermissionButton("Overlay sobre outras apps", PermissionManager.canDrawOverlay(this@ComposeMainActivity)) { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }
+                PermissionButton("Toque na Dynamic Island", PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) { PermissionManager.openAccessibilitySettings(this@ComposeMainActivity) }
                 OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
                 Button(
                     onClick = onFinish,
@@ -399,6 +420,9 @@ class ComposeMainActivity : ComponentActivity() {
             if (!selectedBluetoothAvailable) add("selecionar Bluetooth do carro")
             if (!PermissionManager.canDrawOverlay(this@ComposeMainActivity)) add("autorizar overlay")
             if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) add("autorizar Bluetooth")
+            if (!PermissionManager.canPostNotifications(this@ComposeMainActivity)) add("autorizar notificações")
+            if (!PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) add("ativar controlos de música")
+            if (!PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) add("ativar toque na Dynamic Island")
         }
         val setupReady = missingSetup.isEmpty()
         val setupSubtitle = if (setupReady) {
@@ -414,6 +438,20 @@ class ComposeMainActivity : ComponentActivity() {
                     color = Color(0xFF777780),
                     style = MaterialTheme.typography.labelSmall
                 )
+                var permissionsOpen by remember { mutableStateOf(true) }
+                SettingsSectionHeader("Permissões essenciais", "Acesso necessário para o player, Bluetooth e ilha", permissionsOpen) { permissionsOpen = !permissionsOpen }
+                AnimatedVisibility(permissionsOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PermissionButton("Overlay sobre outras apps", PermissionManager.canDrawOverlay(this@ComposeMainActivity)) { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }
+                        PermissionButton("Bluetooth", PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) { PermissionManager.requestBluetooth(this@ComposeMainActivity) }
+                        PermissionButton("Notificações", PermissionManager.canPostNotifications(this@ComposeMainActivity)) { PermissionManager.requestNotifications(this@ComposeMainActivity) }
+                        PermissionButton("Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
+                        PermissionButton("Toque na Dynamic Island", PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) { PermissionManager.openAccessibilitySettings(this@ComposeMainActivity) }
+                        PermissionButton("Estado do telefone", PermissionManager.canReadPhoneState(this@ComposeMainActivity)) { PermissionManager.requestPhoneState(this@ComposeMainActivity) }
+                        PermissionButton("Fotos dos contactos", PermissionManager.canReadContacts(this@ComposeMainActivity)) { PermissionManager.requestContacts(this@ComposeMainActivity) }
+                        if (missingSetup.isNotEmpty()) Text("Ativa as permissões em falta antes de iniciar o Car Mode para garantir o funcionamento do player e da automação.", color = Color(0xFFFFB340), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Card(
                     colors = CardDefaults.cardColors(containerColor = if (setupReady) Color(0xFF123522) else Color(0xFF382B1A)),
                     modifier = Modifier.fillMaxWidth()
@@ -457,6 +495,7 @@ class ComposeMainActivity : ComponentActivity() {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         AudioFavoritesPicker(apps)
                         SettingsRow(Icons.Rounded.Notifications, "Controlos de música", PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) { PermissionManager.openMediaSettings(this@ComposeMainActivity) }
+                        SettingsRow(Icons.Rounded.Settings, "Toque na Dynamic Island", PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) { PermissionManager.openAccessibilitySettings(this@ComposeMainActivity) }
                         SettingsRow(Icons.Rounded.Place, "Bluetooth automático", autoBluetooth && selectedBluetoothAvailable) {
                             if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) PermissionManager.requestBluetooth(this@ComposeMainActivity)
                             else if (bluetoothAddress.isBlank()) Toast.makeText(this@ComposeMainActivity, "Escolhe primeiro o Bluetooth do carro.", Toast.LENGTH_SHORT).show()
@@ -489,6 +528,7 @@ class ComposeMainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { PermissionManager.requestPhoneState(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canReadPhoneState(this@ComposeMainActivity)) "✓ Chamadas autorizadas" else "Permitir retoma da navegação em chamadas") }
                         OutlinedButton(onClick = { PermissionManager.requestContacts(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canReadContacts(this@ComposeMainActivity)) "✓ Fotos dos contactos autorizadas" else "Permitir fotos dos contactos") }
                         OutlinedButton(onClick = { PermissionManager.openOverlaySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.canDrawOverlay(this@ComposeMainActivity)) "✓ Overlay autorizado · Gerir" else "Permitir overlay sobre outras apps") }
+                        OutlinedButton(onClick = { PermissionManager.openAccessibilitySettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text(if (PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) "✓ Toque na Dynamic Island ativo" else "Ativar toque na Dynamic Island") }
                         OutlinedButton(onClick = { PermissionManager.openAssistantSettings(this@ComposeMainActivity) }, modifier = Modifier.fillMaxWidth()) { Text("Escolher Gemini/assistente do telemóvel") }
                     }
                 }

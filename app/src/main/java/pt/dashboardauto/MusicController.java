@@ -60,9 +60,10 @@ public final class MusicController {
         final String[] result = {"Sem música ativa"};
         withSelected(context, controller -> {
             if (controller.getMetadata() == null) return;
-            CharSequence title = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_TITLE);
+            CharSequence title = trackTitle(controller.getMetadata());
             CharSequence artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_ARTIST);
-            if (TextUtils.isEmpty(title)) title = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
+            if (TextUtils.isEmpty(artist)) artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
+            if (TextUtils.isEmpty(artist)) artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
             if (!TextUtils.isEmpty(title)) result[0] = title + (TextUtils.isEmpty(artist) ? "" : "\n" + artist);
         });
         return result[0];
@@ -74,6 +75,9 @@ public final class MusicController {
             if (controller.getMetadata() == null) return;
             result[0] = controller.getMetadata().getBitmap(android.media.MediaMetadata.METADATA_KEY_ART);
             if (result[0] == null) result[0] = controller.getMetadata().getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART);
+            // YouTube Music e alguns players modernos expõem a capa apenas
+            // como DISPLAY_ICON, não como ART/ALBUM_ART.
+            if (result[0] == null) result[0] = controller.getMetadata().getBitmap(android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON);
         });
         return result[0];
     }
@@ -119,18 +123,58 @@ public final class MusicController {
         if (Build.VERSION.SDK_INT < 21) return null;
         try {
             MediaSessionManager manager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (manager == null) return null;
             ComponentName listener = new ComponentName(context, MusicNotificationListener.class);
-            List<MediaController> sessions = manager.getActiveSessions(listener);
             String preferred = context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE).getString("music_app", "");
+            MediaController mediaKeySession = null;
+            if (Build.VERSION.SDK_INT >= 33) {
+                try {
+                    android.media.session.MediaSession.Token token = manager.getMediaKeyEventSession();
+                    if (token != null) mediaKeySession = new MediaController(context, token);
+                } catch (RuntimeException ignored) { }
+            }
+            if (mediaKeySession != null && !preferred.isEmpty() && preferred.equals(mediaKeySession.getPackageName())) {
+                if (!requirePreferred || !preferred.isEmpty()) return mediaKeySession;
+            }
+            List<MediaController> sessions;
+            try {
+                sessions = manager.getActiveSessions(listener);
+            } catch (SecurityException denied) {
+                return mediaKeySession != null && !requirePreferred ? mediaKeySession : null;
+            }
             MediaController fallback = null;
+            MediaController metadataFallback = hasTrackMetadata(mediaKeySession) ? mediaKeySession : null;
+            MediaController playingFallback = isPlayingWithMetadata(mediaKeySession) ? mediaKeySession : null;
             for (MediaController controller : sessions) {
                 if (preferred.equals(controller.getPackageName())) return controller;
                 if (fallback == null) fallback = controller;
+                if (hasTrackMetadata(controller)) metadataFallback = controller;
+                if (isPlayingWithMetadata(controller)) playingFallback = controller;
             }
-            return requirePreferred && !preferred.isEmpty() ? null : fallback;
+            if (requirePreferred && !preferred.isEmpty()) return null;
+            if (playingFallback != null) return playingFallback;
+            if (metadataFallback != null) return metadataFallback;
+            return fallback != null ? fallback : mediaKeySession;
         } catch (SecurityException ignored) {
             return null;
         }
+    }
+
+    private static boolean hasTrackMetadata(MediaController controller) {
+        return controller != null && !TextUtils.isEmpty(trackTitle(controller.getMetadata()));
+    }
+
+    private static boolean isPlayingWithMetadata(MediaController controller) {
+        android.media.session.PlaybackState state = controller == null ? null : controller.getPlaybackState();
+        return hasTrackMetadata(controller) && state != null && state.getState() == android.media.session.PlaybackState.STATE_PLAYING;
+    }
+
+    private static CharSequence trackTitle(android.media.MediaMetadata metadata) {
+        if (metadata == null) return null;
+        CharSequence title = metadata.getText(android.media.MediaMetadata.METADATA_KEY_TITLE);
+        if (TextUtils.isEmpty(title)) title = metadata.getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
+        if (TextUtils.isEmpty(title)) title = metadata.getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
+        return title;
     }
 
     private static void withSelected(Context context, ControllerAction action) {

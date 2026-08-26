@@ -58,17 +58,43 @@ public final class PermissionManager {
         return false;
     }
 
+    public static boolean isIslandAccessibilityEnabled(Context context) {
+        String enabled = Settings.Secure.getString(context.getContentResolver(), "enabled_accessibility_services");
+        if (enabled == null) return false;
+        ComponentName expected = new ComponentName(context, DriveDeckAccessibilityService.class);
+        for (String item : enabled.split(":")) if (expected.equals(ComponentName.unflattenFromString(item))) return true;
+        return false;
+    }
+
     public static void openOverlaySettings(Context context) {
         openSettings(context, new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 android.net.Uri.parse("package:" + context.getPackageName())));
     }
 
     public static void openMediaSettings(Context context) {
-        openSettings(context, new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+        ComponentName component = new ComponentName(context, MusicNotificationListener.class);
+        Intent detail = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS")
+                .putExtra("android.provider.extra.NOTIFICATION_LISTENER_COMPONENT_NAME", component.flattenToString());
+        openSettingsWithFallback(context, detail, new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
     }
 
     public static void openAssistantSettings(Context context) {
         openSettings(context, new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS));
+    }
+
+    public static void openAccessibilitySettings(Context context) {
+        ComponentName component = new ComponentName(context, DriveDeckAccessibilityService.class);
+        Intent detail = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                .putExtra("android.intent.extra.COMPONENT_NAME", component.flattenToString());
+        openSettingsWithFallback(context, detail, new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+    }
+
+    private static void openSettingsWithFallback(Context context, Intent preferred, Intent fallback) {
+        try {
+            context.startActivity(preferred);
+        } catch (RuntimeException unavailable) {
+            openSettings(context, fallback);
+        }
     }
 
     private static void openSettings(Context context, Intent intent) {
