@@ -321,8 +321,9 @@ public class OverlayService extends Service {
         // 112dp deixa espaço equilibrado para a capa e para as ondas nos ecrãs
         // com punch-hole, mantendo a janela tocável e sem ocupar o topo todo.
         int compactMediaWidth = callActive ? dp(180) : compactIslandWidth();
-        int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : Math.min(dp(318), availableWidth);
-        int minimumMediaWidth = Math.min(dp(expanded ? 280 : 42), expanded ? availableWidth : compactAvailableWidth);
+        int expandedMaxWidth = Math.min(dp(520), availableWidth);
+        int mediaWidth = !expanded ? Math.min(compactMediaWidth, compactAvailableWidth) : expandedMaxWidth;
+        int minimumMediaWidth = Math.min(dp(expanded ? 320 : 42), expanded ? availableWidth : compactAvailableWidth);
         content.addView(mediaContainer, new LinearLayout.LayoutParams(Math.max(minimumMediaWidth, mediaWidth), controlDp(expanded ? 112 : 42)));
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -414,6 +415,11 @@ public class OverlayService extends Service {
         content.setScaleY(requestedScale);
         int overlayFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
         if (expanded) overlayFlags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+        if (expanded && android.os.Build.VERSION.SDK_INT >= 31) {
+            // O blur atrás da janela é aplicado pelo compositor do Android;
+            // abaixo do Android 12 o fundo translúcido continua a funcionar.
+            overlayFlags |= WindowManager.LayoutParams.FLAG_BLUR_BEHIND;
+        }
         if (isCenterIslandPosition()) {
             // A Dynamic Island must occupy the display area behind the status
             // bar/cutout. Without these flags Android repositions overlays
@@ -427,6 +433,9 @@ public class OverlayService extends Service {
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(-2, -2, overlayType, overlayFlags, PixelFormat.TRANSLUCENT);
         if (android.os.Build.VERSION.SDK_INT >= 28) {
             params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
+        if (expanded && android.os.Build.VERSION.SDK_INT >= 31) {
+            params.setBlurBehindRadius(dp(26));
         }
         // Dynamic Island: posição fixa e centrada no topo. Não há resize nem
         // drag para impedir que o gesto de condução roube toques aos botões.
@@ -556,16 +565,16 @@ public class OverlayService extends Service {
     private GradientDrawable panelBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
-                    Color.rgb(7, 7, 9),
-                    Color.rgb(0, 0, 0),
-                    Color.rgb(20, 8, 13)})
+                    Color.argb(178, 18, 19, 25),
+                    Color.argb(145, 8, 9, 14),
+                    Color.argb(170, 38, 18, 28)})
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
                     Color.rgb(27, 29, 39),
                     Color.rgb(7, 8, 13),
                     Color.rgb(22, 24, 34)});
         background.setCornerRadius(dp(expanded ? 22 : 100));
         background.setStroke(expanded ? dp(1) : dp(1), expanded
-                ? Color.argb(90, 255, 255, 255)
+                ? Color.argb(55, 255, 255, 255)
                 : Color.argb(150, Color.red(accentColor()), Color.green(accentColor()), Color.blue(accentColor())));
         return background;
     }
@@ -592,13 +601,13 @@ public class OverlayService extends Service {
     private ImageButton expandedControlButton(int icon, String description, boolean primary) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(icon);
-        button.setColorFilter(primary ? Color.BLACK : Color.WHITE);
+        button.setColorFilter(Color.WHITE);
         button.setContentDescription(description);
         button.setTooltipText(description);
         button.setPadding(dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12), dp(primary ? 15 : 12));
         button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         GradientDrawable background = new GradientDrawable();
-        background.setColor(primary ? Color.WHITE : Color.TRANSPARENT);
+        background.setColor(Color.TRANSPARENT);
         background.setShape(GradientDrawable.OVAL);
         button.setBackground(rippleBackground(background, Color.argb(70, 255, 255, 255)));
         button.setOnTouchListener((view, event) -> {
@@ -891,14 +900,15 @@ public class OverlayService extends Service {
     private ImageButton actionButton(int icon, String description, boolean accent) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(icon);
-        button.setColorFilter(accent ? accentColor() : Color.WHITE);
+        button.setColorFilter(accent && !expanded ? accentColor() : Color.WHITE);
         button.setContentDescription(description);
         button.setTooltipText(description);
         button.setPadding(controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10), controlDp(expanded ? 14 : 10));
         button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         GradientDrawable background = new GradientDrawable();
-        background.setColor(accent ? Color.rgb(69, 27, 42) : Color.rgb(36, 36, 45));
-        background.setCornerRadius(dp(14));
+        background.setColor(expanded ? Color.TRANSPARENT
+                : (accent ? Color.rgb(69, 27, 42) : Color.rgb(36, 36, 45)));
+        background.setCornerRadius(dp(expanded ? 100 : 14));
         button.setBackground(background);
         button.setBackground(rippleBackground(background, Color.rgb(110, 110, 128)));
         button.setOnTouchListener((view, event) -> {
@@ -1108,11 +1118,8 @@ public class OverlayService extends Service {
         ImageButton navigation = actionButton(R.drawable.ic_map, "Abrir navegação", false);
         navigation.setOnClickListener(v -> openConfigured("navigation_app"));
         parent.addView(navigation, secondaryButtonParams());
-        ImageButton music = actionButton(R.drawable.ic_music, "Escolher app de áudio", false);
-        music.setOnClickListener(v -> showAudioChooser());
-        parent.addView(music, secondaryButtonParams());
-        ImageButton close = actionButton(R.drawable.ic_close, "Opções para fechar", true);
-        close.setOnClickListener(v -> showCloseOptions());
+        ImageButton close = actionButton(R.drawable.ic_close, "Fechar tudo", true);
+        close.setOnClickListener(v -> closeEverything());
         parent.addView(close, secondaryButtonParams());
     }
 
