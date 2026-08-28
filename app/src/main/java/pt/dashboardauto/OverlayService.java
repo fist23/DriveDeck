@@ -494,7 +494,7 @@ public class OverlayService extends Service {
             manager.addView(overlay, params);
             FrameLayout createdOverlay = overlay;
             overlay.setOnApplyWindowInsetsListener((view, insets) -> {
-                if (isCenterIslandPosition()) view.post(this::alignIslandToCutout);
+                if (isCenterIslandPosition()) scheduleIslandAlignment();
                 return insets;
             });
             overlay.requestApplyInsets();
@@ -552,7 +552,7 @@ public class OverlayService extends Service {
                     overlay.setScaleX(1f);
                     overlay.setScaleY(expanded ? .92f : .90f);
                     overlay.setTranslationY(expanded ? -dp(8) : dp(10));
-                    alignIslandToCutout();
+                    scheduleIslandAlignment();
                     clampOverlayPosition();
                     content.animate()
                             .scaleX(1f)
@@ -611,6 +611,15 @@ public class OverlayService extends Service {
         windowParams.height = Math.max(1, Math.round(outerHeight * (scaleY <= 0f ? 1f : scaleY)));
         clampWindowBoundsToDisplay();
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
+    }
+
+    /** Reapplies the cutout anchor after the WindowManager measures the new
+     * compact/expanded window across separate frames. */
+    private void scheduleIslandAlignment() {
+        if (!isCenterIslandPosition() || overlay == null) return;
+        overlay.post(this::alignIslandToCutout);
+        overlay.postDelayed(this::alignIslandToCutout, 90L);
+        overlay.postDelayed(this::alignIslandToCutout, 240L);
     }
 
     /** Mantém a janela inteira visível quando o conteúdo muda de tamanho. */
