@@ -457,8 +457,11 @@ public class OverlayService extends Service {
             if (width <= 0 || height <= 0 || windowParams == null || manager == null || overlay == null) return;
             float scaleX = Math.abs(view.getScaleX());
             float scaleY = Math.abs(view.getScaleY());
-            int windowWidth = Math.max(1, Math.round(width * (scaleX <= 0f ? 1f : scaleX)));
-            int windowHeight = Math.max(1, Math.round(height * (scaleY <= 0f ? 1f : scaleY)));
+            int outerWidth = !expanded ? Math.max(width, dp(320)) : width;
+            int outerHeight = height;
+            if (!expanded && compactTrackBanner != null) outerHeight = Math.max(outerHeight, dp(81));
+            int windowWidth = Math.max(1, Math.round(outerWidth * (scaleX <= 0f ? 1f : scaleX)));
+            int windowHeight = Math.max(1, Math.round(outerHeight * (scaleY <= 0f ? 1f : scaleY)));
             // O conteúdo é a fonte de verdade: qualquer mudança provocada por
             // expansão, recolha ou animação atualiza imediatamente a caixa da
             // janela para impedir clipping dos controlos.
@@ -892,6 +895,10 @@ public class OverlayService extends Service {
         banner.setScaleX(.78f);
         banner.setScaleY(.62f);
         banner.setTranslationY(-dp(6));
+        if (overlay != null) {
+            overlay.requestLayout();
+            syncOuterBoundsToContent(playerContent);
+        }
         banner.animate()
                 .alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
                 .setDuration(460L)
