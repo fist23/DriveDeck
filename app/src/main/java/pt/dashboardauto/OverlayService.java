@@ -23,6 +23,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.view.animation.AccelerateInterpolator;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
@@ -837,6 +838,7 @@ public class OverlayService extends Service {
             return;
         }
         transitionContainer.animate().cancel();
+        transitionContainer.setTranslationY(0f);
         if (artwork != null) artwork.animate().cancel();
 
         final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
@@ -884,6 +886,11 @@ public class OverlayService extends Service {
                     if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
                     track.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
                     artist.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
+                    transitionContainer.animate()
+                            .translationY(0f)
+                            .setDuration(260L)
+                            .setInterpolator(new AccelerateDecelerateInterpolator())
+                            .start();
                     android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(expandedWidth, compactWidth);
                     closing.setDuration(300L);
                     closing.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
@@ -913,6 +920,14 @@ public class OverlayService extends Service {
                 }, 1050L);
             }
         });
+        // Afasta a área de texto da linha dos ícones do sistema durante o
+        // reveal. A pill compacta continua no recorte; apenas o conteúdo
+        // temporariamente expandido desce alguns dp para não ficar coberto.
+        transitionContainer.animate()
+                .translationY(dp(7))
+                .setDuration(220L)
+                .setInterpolator(new DecelerateInterpolator(1.35f))
+                .start();
         opening.start();
     }
 
