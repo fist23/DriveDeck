@@ -414,7 +414,7 @@ public class OverlayService extends Service {
             FrameLayout.LayoutParams bannerParams = new FrameLayout.LayoutParams(
                     bannerWidth, dp(34), Gravity.TOP | Gravity.START);
             bannerParams.leftMargin = Math.max(0, (compactWindowWidth - bannerWidth) / 2);
-            bannerParams.topMargin = dp(47);
+            bannerParams.topMargin = dp(44);
             overlay.addView(compactTrackBanner, bannerParams);
         }
         overlay.setOnTouchListener((view, event) -> {
@@ -884,14 +884,17 @@ public class OverlayService extends Service {
         final TextView banner = compactTrackBanner;
         banner.animate().cancel();
         banner.setText(value.replace('\n', ' '));
+        banner.bringToFront();
+        banner.setPivotX(banner.getWidth() / 2f);
+        banner.setPivotY(0f);
         banner.setVisibility(android.view.View.VISIBLE);
         banner.setAlpha(0f);
         banner.setScaleX(.78f);
-        banner.setScaleY(.72f);
-        banner.setTranslationY(-dp(8));
+        banner.setScaleY(.62f);
+        banner.setTranslationY(-dp(6));
         banner.animate()
                 .alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                .setDuration(420L)
+                .setDuration(460L)
                 .setInterpolator(new OvershootInterpolator(1.55f))
                 .withEndAction(() -> refreshHandler.postDelayed(() -> {
                     if (animationToken != trackAnimationToken || compactTrackBanner != banner) return;
