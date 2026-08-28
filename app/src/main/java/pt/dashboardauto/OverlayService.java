@@ -52,6 +52,7 @@ public class OverlayService extends Service {
     private TextView timeLabel;
     private ImageView artwork;
     private android.view.View musicInfoContainer;
+    private TextView compactTrackBanner;
     private Bitmap renderedArtwork;
     private long renderedArtworkSignature;
     private ImageButton playButton;
@@ -387,6 +388,24 @@ public class OverlayService extends Service {
         int compactWindowWidth = Math.min(dp(320), compactAvailableWidth);
         overlay.addView(content, new FrameLayout.LayoutParams(
                 expanded ? -2 : compactWindowWidth, -2, Gravity.TOP | Gravity.START));
+        if (!expanded && !callActive) {
+            compactTrackBanner = new TextView(this);
+            compactTrackBanner.setTextColor(Color.WHITE);
+            compactTrackBanner.setTextSize(11);
+            compactTrackBanner.setGravity(Gravity.CENTER);
+            compactTrackBanner.setMaxLines(2);
+            compactTrackBanner.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            compactTrackBanner.setPadding(dp(12), 0, dp(12), 0);
+            compactTrackBanner.setBackground(panelBackground());
+            compactTrackBanner.setVisibility(android.view.View.INVISIBLE);
+            compactTrackBanner.setClickable(false);
+            int bannerWidth = Math.min(dp(250), Math.max(dp(150), compactWindowWidth - dp(20)));
+            FrameLayout.LayoutParams bannerParams = new FrameLayout.LayoutParams(
+                    bannerWidth, dp(34), Gravity.TOP | Gravity.START);
+            bannerParams.leftMargin = Math.max(0, (compactWindowWidth - bannerWidth) / 2);
+            bannerParams.topMargin = dp(47);
+            overlay.addView(compactTrackBanner, bannerParams);
+        }
         overlay.setOnTouchListener((view, event) -> {
             if (expanded && event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
                 toggleExpanded();
@@ -587,7 +606,9 @@ public class OverlayService extends Service {
         float scaleX = Math.abs(content.getScaleX());
         float scaleY = Math.abs(content.getScaleY());
         windowParams.width = Math.max(1, Math.round(width * (scaleX <= 0f ? 1f : scaleX)));
-        windowParams.height = Math.max(1, Math.round(height * (scaleY <= 0f ? 1f : scaleY)));
+        int outerHeight = height;
+        if (!expanded && compactTrackBanner != null) outerHeight = Math.max(outerHeight, dp(81));
+        windowParams.height = Math.max(1, Math.round(outerHeight * (scaleY <= 0f ? 1f : scaleY)));
         clampWindowBoundsToDisplay();
         try { manager.updateViewLayout(overlay, windowParams); } catch (IllegalArgumentException ignored) { }
     }
@@ -833,108 +854,36 @@ public class OverlayService extends Service {
     }
 
     private void animateCompactTrackChange(String value) {
-        if (musicInfoContainer == null || track == null || artist == null) return;
+        if (musicInfoContainer == null || track == null || artist == null || compactTrackBanner == null) return;
         trackTransitionRunning = true;
         pendingTrackValue = null;
         final int animationToken = ++trackAnimationToken;
-        final android.view.View transitionContainer = musicInfoContainer;
-        if (windowParams == null || playerContent == null) {
-            renderTrack(value);
-            finishTrackAnimation(animationToken, value);
-            return;
-        }
-        transitionContainer.animate().cancel();
-        transitionContainer.setTranslationY(0f);
-        if (artwork != null) artwork.animate().cancel();
-
-        final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
-        final int compactWidth = Math.max(1, mediaParams.width > 0 ? mediaParams.width : compactIslandWidth());
-        // Não depender de playerContent.getWidth(): no primeiro refresh após
-        // criar o overlay essa view ainda pode não estar medida (width == 0),
-        // o que anteriormente anulava silenciosamente a animação.
-        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        final int expandedWidth = Math.min(dp(292), Math.max(compactWidth + dp(28), screenWidth - dp(24)));
-        final int compactMediaWidth = mediaParams.width;
-        final int compactTrackVisibility = track.getVisibility();
-        final int compactArtistVisibility = artist.getVisibility();
-        final int compactLabelsVisibility = musicLabelsContainer == null
-                ? android.view.View.GONE : musicLabelsContainer.getVisibility();
-        if (musicLabelsContainer != null) musicLabelsContainer.setVisibility(android.view.View.VISIBLE);
-        track.setVisibility(android.view.View.VISIBLE);
-        artist.setVisibility(android.view.View.VISIBLE);
-        // Mantém o mesmo tamanho legível do modo compacto durante o reveal;
-        // a largura extra é que revela o texto, não uma redução da tipografia.
-        track.setTextSize(12);
-        artist.setTextSize(10);
-        track.setAlpha(0f);
-        artist.setAlpha(0f);
-        track.setTranslationX(-dp(10));
-        artist.setTranslationX(-dp(10));
         renderTrack(value);
-
-        // A caixa exterior já tem largura fixa. Só o mediaContainer cresce
-        // para a esquerda dentro dela, logo o WindowManager não reposiciona a
-        // ilha nem a faz saltar atrás do recorte.
-        android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactWidth, expandedWidth);
-        opening.setDuration(280L);
-        opening.setInterpolator(new DecelerateInterpolator(1.45f));
-        opening.addUpdateListener(animation -> {
-            int width = (Integer) animation.getAnimatedValue();
-            mediaParams.width = width;
-            transitionContainer.setLayoutParams(mediaParams);
-        });
-        opening.addListener(new android.animation.AnimatorListenerAdapter() {
-            @Override public void onAnimationEnd(android.animation.Animator animation) {
-                if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
-                track.animate().alpha(1f).translationX(0f).setDuration(220L).start();
-                artist.animate().alpha(1f).translationX(0f).setDuration(240L).start();
-                refreshHandler.postDelayed(() -> {
-                    if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
-                    track.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
-                    artist.animate().alpha(0f).translationX(-dp(6)).setDuration(120L).start();
-                    transitionContainer.animate()
-                            .translationY(0f)
+        final TextView banner = compactTrackBanner;
+        banner.animate().cancel();
+        banner.setText(value.replace('\n', ' '));
+        banner.setVisibility(android.view.View.VISIBLE);
+        banner.setAlpha(0f);
+        banner.setScaleX(.78f);
+        banner.setScaleY(.72f);
+        banner.setTranslationY(-dp(8));
+        banner.animate()
+                .alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                .setDuration(420L)
+                .setInterpolator(new OvershootInterpolator(1.55f))
+                .withEndAction(() -> refreshHandler.postDelayed(() -> {
+                    if (animationToken != trackAnimationToken || compactTrackBanner != banner) return;
+                    banner.animate()
+                            .alpha(0f).scaleX(.82f).scaleY(.72f).translationY(-dp(6))
                             .setDuration(260L)
                             .setInterpolator(new AccelerateDecelerateInterpolator())
-                            .start();
-                    android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(expandedWidth, compactWidth);
-                    closing.setDuration(300L);
-                    closing.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
-                    closing.addUpdateListener(closeAnimation -> {
-                        int width = (Integer) closeAnimation.getAnimatedValue();
-                        mediaParams.width = width;
-                        transitionContainer.setLayoutParams(mediaParams);
-                    });
-                    closing.addListener(new android.animation.AnimatorListenerAdapter() {
-                        @Override public void onAnimationEnd(android.animation.Animator animation) {
-                            if (animationToken != trackAnimationToken || musicInfoContainer != transitionContainer) return;
-                            mediaParams.width = compactMediaWidth;
-                            transitionContainer.setLayoutParams(mediaParams);
-                            track.setAlpha(1f);
-                            artist.setAlpha(1f);
-                            track.setTranslationX(0f);
-                            artist.setTranslationX(0f);
-                            track.setTextSize(12);
-                            artist.setTextSize(10);
-                            track.setVisibility(compactTrackVisibility);
-                            artist.setVisibility(compactArtistVisibility);
-                            if (musicLabelsContainer != null) musicLabelsContainer.setVisibility(compactLabelsVisibility);
-                            finishTrackAnimation(animationToken, value);
-                        }
-                    });
-                    closing.start();
-                }, 1050L);
-            }
-        });
-        // Afasta a área de texto da linha dos ícones do sistema durante o
-        // reveal. A pill compacta continua no recorte; apenas o conteúdo
-        // temporariamente expandido desce alguns dp para não ficar coberto.
-        transitionContainer.animate()
-                .translationY(dp(7))
-                .setDuration(220L)
-                .setInterpolator(new DecelerateInterpolator(1.35f))
-                .start();
-        opening.start();
+                            .withEndAction(() -> {
+                                if (compactTrackBanner != banner) return;
+                                banner.setVisibility(android.view.View.INVISIBLE);
+                                banner.setTranslationY(0f);
+                                finishTrackAnimation(animationToken, value);
+                            }).start();
+                }, 900L)).start();
     }
 
     private void finishTrackAnimation(int animationToken, String value) {
@@ -1227,7 +1176,9 @@ public class OverlayService extends Service {
         if (selected == null) return dp(8);
         int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
         int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
-        int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight : (expanded ? dp(180) : dp(42));
+        int islandHeight = expanded
+                ? (baseOverlayHeight > 0 ? baseOverlayHeight : dp(180))
+                : dp(42);
         if (!expanded) {
             // TYPE_APPLICATION_OVERLAY is below the status bar. Keep the
             // compact island clear of notification icons when accessibility
@@ -1404,6 +1355,7 @@ public class OverlayService extends Service {
         durationMs = 0L;
         artwork = null;
         musicInfoContainer = null;
+        compactTrackBanner = null;
         renderedArtwork = null;
         renderedArtworkSignature = 0L;
         if (playingDrawable != null) playingDrawable.stop();
