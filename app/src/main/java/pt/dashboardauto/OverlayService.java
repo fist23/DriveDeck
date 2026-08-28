@@ -52,6 +52,7 @@ public class OverlayService extends Service {
     private ImageView artwork;
     private android.view.View musicInfoContainer;
     private Bitmap renderedArtwork;
+    private long renderedArtworkSignature;
     private ImageButton playButton;
     private AnimatedWaveDrawable playingDrawable;
     private ImageView compactWave;
@@ -524,7 +525,7 @@ public class OverlayService extends Service {
                     overlay.setPivotY(0f);
                     overlay.setScaleX(1f);
                     overlay.setScaleY(expanded ? .92f : .90f);
-                    overlay.setTranslationY(expanded ? -dp(8) : dp(12));
+                    overlay.setTranslationY(expanded ? -dp(8) : dp(10));
                     alignIslandToCutout();
                     clampOverlayPosition();
                     content.animate()
@@ -674,10 +675,9 @@ public class OverlayService extends Service {
         boolean trackChanged = textChanged || keyChanged;
         lastTrackValue = value;
         lastTrackKey = trackKey;
-        Bitmap previousArtwork = renderedArtwork;
+        long previousArtworkSignature = renderedArtworkSignature;
         if (trackChanged) animateTrackChange(value); else renderTrack(value, true);
-        if (!trackChanged && previousArtwork != null && renderedArtwork != null
-                && previousArtwork != renderedArtwork) animateTrackChange(value);
+        if (!trackChanged && previousArtworkSignature != renderedArtworkSignature) animateTrackChange(value);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
         setPlayButtonState(playingState, false);
@@ -734,14 +734,37 @@ public class OverlayService extends Service {
         }
         if (artwork != null && (refreshArtwork || artwork.getDrawable() == null)) {
             Bitmap bitmap = MusicController.currentArtwork(this);
-            if (bitmap != renderedArtwork || artwork.getDrawable() == null) {
+            long signature = artworkSignature(bitmap);
+            if (signature != renderedArtworkSignature || artwork.getDrawable() == null) {
                 renderedArtwork = bitmap;
+                renderedArtworkSignature = signature;
                 artwork.animate().cancel();
                 artwork.setAlpha(0f);
                 if (bitmap != null) artwork.setImageBitmap(bitmap); else artwork.setImageResource(R.drawable.ic_music);
                 artwork.animate().alpha(1f).setDuration(180).start();
             }
         }
+    }
+
+    /**
+     * Identifica a imagem pelo conteúdo, não pela referência Bitmap. Algumas
+     * apps recriam o Bitmap a cada consulta mesmo sem mudar a capa, o que
+     * provocava o fade contínuo da imagem na pill compacta.
+     */
+    private long artworkSignature(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()) return 0L;
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        long signature = 17L * width + height;
+        int[][] samples = {
+                {0, 0}, {width - 1, 0}, {0, height - 1},
+                {width - 1, height - 1}, {width / 2, height / 2}
+        };
+        for (int[] sample : samples) {
+            int pixel = bitmap.getPixel(Math.max(0, sample[0]), Math.max(0, sample[1]));
+            signature = signature * 31L + pixel;
+        }
+        return signature;
     }
 
     private void animateTrackChange(String value) {
@@ -1353,6 +1376,7 @@ public class OverlayService extends Service {
         artwork = null;
         musicInfoContainer = null;
         renderedArtwork = null;
+        renderedArtworkSignature = 0L;
         if (playingDrawable != null) playingDrawable.stop();
         playingDrawable = null;
         if (compactWaveDrawable != null) compactWaveDrawable.stop();
