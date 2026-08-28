@@ -206,7 +206,9 @@ public class OverlayService extends Service {
         });
         content.setPadding(dp(expanded ? 14 : 4), dp(expanded ? 9 : 3), dp(expanded ? 14 : 4), dp(expanded ? 9 : 3));
         boolean splitCompactIsland = !expanded && isCenterIslandPosition();
-        content.setBackground(splitCompactIsland ? null : panelBackground());
+        // The outer container is transparent in compact mode; only the pill
+        // itself should draw a rounded background.
+        content.setBackground(expanded ? panelBackground() : null);
         FrameLayout mediaContainer = new FrameLayout(this);
         mediaContainer.setClipChildren(false);
         mediaContainer.setClipToPadding(false);
@@ -218,6 +220,14 @@ public class OverlayService extends Service {
         mediaInfo.setClipToPadding(false);
         mediaInfo.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 8 : 3), dp(expanded ? 12 : 4), dp(expanded ? 8 : 3));
         mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
+        if (!expanded) {
+            mediaInfo.setClipToOutline(true);
+            mediaInfo.setOutlineProvider(new android.view.ViewOutlineProvider() {
+                @Override public void getOutline(android.view.View view, android.graphics.Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), view.getHeight() / 2f);
+                }
+            });
+        }
         mediaInfo.setOnClickListener(v -> {
             if (!expanded) toggleExpanded();
             else openConfigured("music_app");
@@ -342,7 +352,8 @@ public class OverlayService extends Service {
         mediaContainer.setOnClickListener(v -> {
             if (!expanded) toggleExpanded();
         });
-        mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(-1, -1));
+        mediaContainer.addView(mediaInfo, new FrameLayout.LayoutParams(
+                expanded ? -1 : compactIslandWidth(), -1));
         int availableWidth = Math.max(dp(1), getResources().getDisplayMetrics().widthPixels - dp(16));
         int compactAvailableWidth = availableWidth;
         // A pill compacta acompanha o recorte, sem duplicar o indicador de música.
@@ -536,9 +547,9 @@ public class OverlayService extends Service {
                     // a entrada. Escalar o conteúdo antes de o alinhar fazia o
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
-                    content.setScaleX(expanded ? .92f : .72f);
-                    content.setScaleY(expanded ? .76f : .70f);
-                    content.setTranslationY(expanded ? -dp(20) : dp(12));
+                    content.setScaleX(1f);
+                    content.setScaleY(1f);
+                    content.setTranslationY(expanded ? -dp(8) : dp(4));
                     content.setAlpha(0f);
                     if (!expanded) {
                         // A pill está no lado direito da caixa fixa. O pivô
@@ -550,8 +561,8 @@ public class OverlayService extends Service {
                     overlay.setPivotX(baseOverlayWidth / 2f);
                     overlay.setPivotY(0f);
                     overlay.setScaleX(1f);
-                    overlay.setScaleY(expanded ? .92f : .90f);
-                    overlay.setTranslationY(expanded ? -dp(8) : dp(10));
+                    overlay.setScaleY(1f);
+                    overlay.setTranslationY(0f);
                     scheduleIslandAlignment();
                     clampOverlayPosition();
                     content.animate()
@@ -605,7 +616,9 @@ public class OverlayService extends Service {
         if (windowParams == null || manager == null) return;
         float scaleX = Math.abs(content.getScaleX());
         float scaleY = Math.abs(content.getScaleY());
-        windowParams.width = Math.max(1, Math.round(width * (scaleX <= 0f ? 1f : scaleX)));
+        int outerWidth = width;
+        if (!expanded) outerWidth = Math.max(outerWidth, dp(320));
+        windowParams.width = Math.max(1, Math.round(outerWidth * (scaleX <= 0f ? 1f : scaleX)));
         int outerHeight = height;
         if (!expanded && compactTrackBanner != null) outerHeight = Math.max(outerHeight, dp(81));
         windowParams.height = Math.max(1, Math.round(outerHeight * (scaleY <= 0f ? 1f : scaleY)));
@@ -1422,10 +1435,10 @@ public class OverlayService extends Service {
         }
         overlay.animate()
                 .alpha(0f)
-                .scaleX(nextState ? .94f : .96f)
-                .scaleY(nextState ? .86f : .82f)
-                .translationY(nextState ? -dp(8) : -dp(16))
-                .setInterpolator(new AccelerateInterpolator(nextState ? 1.35f : 1.55f))
+                .scaleX(1f)
+                .scaleY(1f)
+                .translationY(nextState ? -dp(8) : -dp(12))
+                .setInterpolator(new OvershootInterpolator(nextState ? 1.1f : 1.25f))
                 .setDuration(nextState ? 180 : 210)
                 .withEndAction(() -> {
             expanded = nextState;
