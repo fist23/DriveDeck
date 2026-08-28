@@ -174,6 +174,11 @@ public class OverlayService extends Service {
         if (service == null) return;
         service.refreshHandler.removeCallbacks(service.refreshTrack);
         service.refreshHandler.post(service.refreshTrack);
+        // Algumas apps publicam a notificação antes de atualizarem a
+        // MediaSession. Estes refreshes pontuais capturam a nova faixa sem
+        // duplicar o ciclo periódico de 1 segundo.
+        service.refreshHandler.postDelayed(service::updateTrack, 180L);
+        service.refreshHandler.postDelayed(service::updateTrack, 600L);
     }
 
     private void addOverlay() {
@@ -202,6 +207,8 @@ public class OverlayService extends Service {
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
         mediaInfo.setGravity(Gravity.CENTER_VERTICAL);
+        mediaInfo.setClipChildren(false);
+        mediaInfo.setClipToPadding(false);
         mediaInfo.setPadding(dp(expanded ? 12 : 4), dp(expanded ? 8 : 3), dp(expanded ? 12 : 4), dp(expanded ? 8 : 3));
         mediaInfo.setBackground(rippleBackground(mediaBackground(), Color.rgb(90, 90, 110)));
         mediaInfo.setOnClickListener(v -> {
@@ -314,7 +321,10 @@ public class OverlayService extends Service {
         // artwork and the expand affordance remain visible, while metadata is
         // revealed only after the user opens the player.
         labels.setVisibility(expanded ? android.view.View.VISIBLE : android.view.View.GONE);
-        mediaInfo.addView(labels, new LinearLayout.LayoutParams(0, -1, 1f));
+        // O texto fica entre a capa e o indicador de reprodução. Em compacto
+        // começa oculto, mas mantém a posição correta quando a animação o
+        // revela temporariamente.
+        mediaInfo.addView(labels, 1, new LinearLayout.LayoutParams(0, -1, 1f));
         if (callActive) {
             mediaInfo.removeAllViews();
             addCallInfo(mediaInfo, expanded);
@@ -499,8 +509,8 @@ public class OverlayService extends Service {
                     // a entrada. Escalar o conteúdo antes de o alinhar fazia o
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
-                    content.setScaleX(expanded ? .94f : .62f);
-                    content.setScaleY(expanded ? .80f : .62f);
+                    content.setScaleX(expanded ? .92f : .72f);
+                    content.setScaleY(expanded ? .76f : .70f);
                     content.setTranslationY(expanded ? -dp(20) : dp(12));
                     content.setAlpha(0f);
                     if (!expanded) {
@@ -513,7 +523,7 @@ public class OverlayService extends Service {
                     overlay.setPivotX(baseOverlayWidth / 2f);
                     overlay.setPivotY(0f);
                     overlay.setScaleX(1f);
-                    overlay.setScaleY(expanded ? .90f : .88f);
+                    overlay.setScaleY(expanded ? .92f : .90f);
                     overlay.setTranslationY(expanded ? -dp(8) : dp(12));
                     alignIslandToCutout();
                     clampOverlayPosition();
@@ -522,8 +532,8 @@ public class OverlayService extends Service {
                             .scaleY(1f)
                             .translationY(0f)
                             .alpha(1f)
-                            .setInterpolator(new OvershootInterpolator(expanded ? 1.25f : 1.45f))
-                            .setDuration(expanded ? 360 : 420)
+                            .setInterpolator(new OvershootInterpolator(expanded ? 1.45f : 1.65f))
+                            .setDuration(expanded ? 520 : 460)
                             .start();
                     overlay.animate()
                             .alpha(1f)
@@ -592,9 +602,9 @@ public class OverlayService extends Service {
     private GradientDrawable panelBackground() {
         GradientDrawable background = expanded
                 ? new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{
-                    Color.argb(236, 18, 19, 25),
-                    Color.argb(224, 8, 9, 14),
-                    Color.argb(232, 38, 18, 28)})
+                    Color.argb(246, 4, 4, 6),
+                    Color.argb(242, 0, 0, 0),
+                    Color.argb(246, 7, 4, 8)})
                 : new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{
                     Color.rgb(27, 29, 39),
                     Color.rgb(7, 8, 13),
@@ -664,7 +674,10 @@ public class OverlayService extends Service {
         boolean trackChanged = textChanged || keyChanged;
         lastTrackValue = value;
         lastTrackKey = trackKey;
-        if (trackChanged) animateTrackChange(value); else renderTrack(value, false);
+        Bitmap previousArtwork = renderedArtwork;
+        if (trackChanged) animateTrackChange(value); else renderTrack(value, true);
+        if (!trackChanged && previousArtwork != null && renderedArtwork != null
+                && previousArtwork != renderedArtwork) animateTrackChange(value);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
         setPlayButtonState(playingState, false);
@@ -805,12 +818,11 @@ public class OverlayService extends Service {
 
         final android.view.ViewGroup.LayoutParams mediaParams = transitionContainer.getLayoutParams();
         final int compactWidth = Math.max(1, mediaParams.width > 0 ? mediaParams.width : compactIslandWidth());
-        final int expandedWidth = Math.min(dp(292), Math.max(compactWidth, playerContent.getWidth()));
-        if (expandedWidth <= compactWidth + dp(12)) {
-            renderTrack(value);
-            finishTrackAnimation(animationToken, value);
-            return;
-        }
+        // Não depender de playerContent.getWidth(): no primeiro refresh após
+        // criar o overlay essa view ainda pode não estar medida (width == 0),
+        // o que anteriormente anulava silenciosamente a animação.
+        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        final int expandedWidth = Math.min(dp(292), Math.max(compactWidth + dp(28), screenWidth - dp(24)));
         final int compactMediaWidth = mediaParams.width;
         final int compactTrackVisibility = track.getVisibility();
         final int compactArtistVisibility = artist.getVisibility();
@@ -819,8 +831,10 @@ public class OverlayService extends Service {
         if (musicLabelsContainer != null) musicLabelsContainer.setVisibility(android.view.View.VISIBLE);
         track.setVisibility(android.view.View.VISIBLE);
         artist.setVisibility(android.view.View.VISIBLE);
-        track.setTextSize(11);
-        artist.setTextSize(9);
+        // Mantém o mesmo tamanho legível do modo compacto durante o reveal;
+        // a largura extra é que revela o texto, não uma redução da tipografia.
+        track.setTextSize(12);
+        artist.setTextSize(10);
         track.setAlpha(0f);
         artist.setAlpha(0f);
         track.setTranslationX(-dp(10));
@@ -1381,15 +1395,24 @@ public class OverlayService extends Service {
         }
         android.util.Log.d("DriveDeckIsland", "toggle expanded=" + expanded + " next=" + nextState);
         layoutTransitionRunning = true;
-        overlay.setPivotX(overlay.getWidth() / 2f);
-        overlay.setPivotY(0f);
+        // A pill compacta ocupa apenas o lado direito da janela estável. Usar
+        // o centro da janela como pivô fazia a saída parecer deslocar-se
+        // lateralmente antes da expansão. A transição parte agora do centro
+        // visual da ilha e a expansão continua presa ao recorte.
+        if (!expanded) {
+            overlay.setPivotX(Math.max(0f, overlay.getWidth() - compactIslandWidth() / 2f));
+            overlay.setPivotY(overlay.getHeight() / 2f);
+        } else {
+            overlay.setPivotX(overlay.getWidth() / 2f);
+            overlay.setPivotY(0f);
+        }
         overlay.animate()
                 .alpha(0f)
-                .scaleX(nextState ? .92f : .94f)
-                .scaleY(nextState ? .90f : .92f)
-                .translationY(nextState ? -dp(10) : -dp(18))
-                .setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator())
-                .setDuration(nextState ? 210 : 230)
+                .scaleX(nextState ? .94f : .96f)
+                .scaleY(nextState ? .86f : .82f)
+                .translationY(nextState ? -dp(8) : -dp(16))
+                .setInterpolator(new AccelerateInterpolator(nextState ? 1.35f : 1.55f))
+                .setDuration(nextState ? 180 : 210)
                 .withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();

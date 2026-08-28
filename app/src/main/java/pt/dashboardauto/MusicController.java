@@ -78,6 +78,8 @@ public final class MusicController {
             if (metadata == null) return;
             CharSequence title = trackTitle(metadata);
             CharSequence artist = metadata.getText(android.media.MediaMetadata.METADATA_KEY_ARTIST);
+            if (TextUtils.isEmpty(artist)) artist = metadata.getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
+            if (TextUtils.isEmpty(artist)) artist = metadata.getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
             CharSequence album = metadata.getText(android.media.MediaMetadata.METADATA_KEY_ALBUM);
             long duration = metadata.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
             result[0] = controller.getPackageName() + "|"
