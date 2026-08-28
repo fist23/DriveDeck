@@ -190,8 +190,10 @@ public class OverlayService extends Service {
         baseOverlayHeight = 0;
         overlay = new FrameLayout(this);
         overlay.setClipChildren(false);
+        overlay.setClipToPadding(false);
         LinearLayout content = new LinearLayout(this);
         content.setClipChildren(false);
+        content.setClipToPadding(false);
         content.setOrientation(!expanded ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         content.setGravity(expanded ? Gravity.CENTER : (Gravity.RIGHT | Gravity.CENTER_VERTICAL));
         content.setClickable(true);
@@ -205,6 +207,8 @@ public class OverlayService extends Service {
         boolean splitCompactIsland = !expanded && isCenterIslandPosition();
         content.setBackground(splitCompactIsland ? null : panelBackground());
         FrameLayout mediaContainer = new FrameLayout(this);
+        mediaContainer.setClipChildren(false);
+        mediaContainer.setClipToPadding(false);
         musicInfoContainer = mediaContainer;
         LinearLayout mediaInfo = new LinearLayout(this);
         mediaInfo.setOrientation(LinearLayout.HORIZONTAL);
@@ -378,7 +382,9 @@ public class OverlayService extends Service {
         }
         // O content fica num FrameLayout independente para que o tamanho da janela
         // possa acompanhar a escala sem esticar novamente os botões por dentro.
-        int compactWindowWidth = Math.min(dp(300), compactAvailableWidth);
+        // Reserve real outer space so the horizontal reveal never clips at
+        // the window edge while the compact pill remains right-aligned.
+        int compactWindowWidth = Math.min(dp(320), compactAvailableWidth);
         overlay.addView(content, new FrameLayout.LayoutParams(
                 expanded ? -2 : compactWindowWidth, -2, Gravity.TOP | Gravity.START));
         overlay.setOnTouchListener((view, event) -> {
@@ -1219,8 +1225,16 @@ public class OverlayService extends Service {
     private int cutoutAlignedY() {
         android.graphics.Rect selected = centralCutout();
         if (selected == null) return dp(8);
+        int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
         int islandHeight = baseOverlayHeight > 0 ? baseOverlayHeight : (expanded ? dp(180) : dp(42));
         if (!expanded) {
+            // TYPE_APPLICATION_OVERLAY is below the status bar. Keep the
+            // compact island clear of notification icons when accessibility
+            // is not providing the cutout-safe coordinate space.
+            if (!DriveDeckAccessibilityService.isConnected()) {
+                return Math.max(statusBarHeight + dp(4), selected.bottom + dp(4));
+            }
             // No modo compacto, os controlos ficam de cada lado do recorte.
             // O vazio central deixa a câmara visível, como no Dynamic Island.
             return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
