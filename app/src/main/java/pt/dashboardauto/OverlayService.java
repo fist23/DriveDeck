@@ -205,7 +205,6 @@ public class OverlayService extends Service {
             }
         });
         content.setPadding(dp(expanded ? 14 : 4), dp(expanded ? 9 : 3), dp(expanded ? 14 : 4), dp(expanded ? 9 : 3));
-        boolean splitCompactIsland = !expanded && isCenterIslandPosition();
         // The outer container is transparent in compact mode; only the pill
         // itself should draw a rounded background.
         content.setBackground(expanded ? panelBackground() : null);
@@ -368,6 +367,7 @@ public class OverlayService extends Service {
             compactTrackDetails.setTextColor(Color.WHITE);
             compactTrackDetails.setTextSize(11);
             compactTrackDetails.setGravity(Gravity.CENTER);
+            compactTrackDetails.setIncludeFontPadding(false);
             compactTrackDetails.setSingleLine(true);
             compactTrackDetails.setEllipsize(android.text.TextUtils.TruncateAt.END);
             compactTrackDetails.setPadding(dp(10), 0, dp(10), 0);
@@ -555,8 +555,8 @@ public class OverlayService extends Service {
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
                     content.setScaleX(1f);
-                    content.setScaleY(1f);
-                    content.setTranslationY(expanded ? -dp(8) : dp(4));
+                    content.setScaleY(expanded ? .86f : .90f);
+                    content.setTranslationY(expanded ? -dp(10) : dp(3));
                     content.setAlpha(0f);
                     if (!expanded) {
                         // A pill está no lado direito da caixa fixa. O pivô
@@ -564,6 +564,9 @@ public class OverlayService extends Service {
                         // transparente usado para revelar o título.
                         content.setPivotX(Math.max(0f, baseOverlayWidth - compactIslandWidth() / 2f));
                         content.setPivotY(baseOverlayHeight / 2f);
+                    } else {
+                        content.setPivotX(baseOverlayWidth / 2f);
+                        content.setPivotY(0f);
                     }
                     overlay.setPivotX(baseOverlayWidth / 2f);
                     overlay.setPivotY(0f);
@@ -577,8 +580,8 @@ public class OverlayService extends Service {
                             .scaleY(1f)
                             .translationY(0f)
                             .alpha(1f)
-                            .setInterpolator(new OvershootInterpolator(expanded ? 1.45f : 1.65f))
-                            .setDuration(expanded ? 520 : 460)
+                            .setInterpolator(new OvershootInterpolator(1.65f))
+                            .setDuration(expanded ? 560 : 460)
                             .start();
                     overlay.animate()
                             .alpha(1f)
@@ -894,13 +897,15 @@ public class OverlayService extends Service {
         details.setText(value.split("\\n", 2)[0]);
         details.setVisibility(android.view.View.VISIBLE);
         details.setAlpha(0f);
-        details.setTranslationY(-dp(4));
+        details.setPivotY(0f);
+        details.setTranslationY(-dp(6));
+        details.setScaleY(.86f);
         containerParams.height = compactHeight;
         contentParams.height = compactHeight;
         playerContent.setLayoutParams(contentParams);
         android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactHeight, revealHeight);
-        opening.setDuration(420L);
-        opening.setInterpolator(new OvershootInterpolator(1.35f));
+        opening.setDuration(520L);
+        opening.setInterpolator(new OvershootInterpolator(1.65f));
         opening.addUpdateListener(animation -> {
             int height = (Integer) animation.getAnimatedValue();
             containerParams.height = height;
@@ -912,13 +917,17 @@ public class OverlayService extends Service {
         opening.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(android.animation.Animator animation) {
                 if (animationToken != trackAnimationToken || compactTrackDetails != details) return;
-                details.animate().alpha(1f).translationY(0f).setDuration(180L).start();
+                details.animate().alpha(1f).translationY(0f).scaleY(1f)
+                        .setDuration(300L)
+                        .setInterpolator(new OvershootInterpolator(1.25f))
+                        .start();
                 refreshHandler.postDelayed(() -> {
                     if (animationToken != trackAnimationToken || compactTrackDetails != details) return;
-                    details.animate().alpha(0f).translationY(-dp(3)).setDuration(180L).start();
+                    details.animate().alpha(0f).translationY(-dp(3)).scaleY(.94f)
+                            .setDuration(180L).start();
                     android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(revealHeight, compactHeight);
-                    closing.setDuration(360L);
-                    closing.setInterpolator(new AccelerateDecelerateInterpolator());
+                    closing.setDuration(420L);
+                    closing.setInterpolator(new OvershootInterpolator(.85f));
                     closing.addUpdateListener(close -> {
                         int height = (Integer) close.getAnimatedValue();
                         containerParams.height = height;
@@ -933,6 +942,7 @@ public class OverlayService extends Service {
                             details.setVisibility(android.view.View.GONE);
                             details.setAlpha(1f);
                             details.setTranslationY(0f);
+                            details.setScaleY(1f);
                             containerParams.height = compactHeight;
                             contentParams.height = compactHeight;
                             finishTrackAnimation(animationToken, value);
