@@ -46,6 +46,20 @@ public final class PermissionManager {
         return context.checkSelfPermission("android.permission.READ_CONTACTS") == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
+    public static boolean isIgnoringBatteryOptimizations(Context context) {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        try {
+            android.os.PowerManager power = (android.os.PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            return power != null && power.isIgnoringBatteryOptimizations(context.getPackageName());
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    public static void openBatterySettings(Context context) {
+        openSettings(context, new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+    }
+
     public static void requestContacts(Activity activity) {
         if (!canReadContacts(activity)) activity.requestPermissions(new String[]{"android.permission.READ_CONTACTS"}, REQUEST_CONTACTS);
     }

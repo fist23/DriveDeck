@@ -14,6 +14,8 @@ object UpdateChecker {
     const val PENDING_UPDATE_VERSION = "pending_update_version"
     const val PENDING_UPDATE_DOWNLOAD_ID = "pending_update_download_id"
     const val DISMISSED_UPDATE_ALERT_VERSION = "dismissed_update_alert_version"
+    const val LAST_UPDATE_STATUS = "last_update_status"
+    const val LAST_UPDATE_STATUS_DETAIL = "last_update_status_detail"
     const val UPDATE_INSTALL_COMPLETE_ACTION = "pt.dashboardauto.action.UPDATE_INSTALL_COMPLETE"
     const val TEMP_UPDATE_DIRECTORY = "updates"
     private val executor = Executors.newSingleThreadExecutor()
@@ -40,6 +42,7 @@ object UpdateChecker {
                     setRequestProperty("User-Agent", "DriveDeck/${BuildConfig.VERSION_NAME}")
                 }
                 if (connection.responseCode !in 200..299) {
+                    setStatus(context, "check_failed", "Não foi possível verificar atualizações agora")
                     result(null)
                     return@execute
                 }
@@ -52,6 +55,7 @@ object UpdateChecker {
                 val currentVersion = installedVersion(context)
                 if (remoteVersion.isBlank() || compareVersions(remoteVersion, currentVersion) <= 0) {
                     clearPendingIfInstalled(context, remoteVersion, currentVersion)
+                    setStatus(context, "up_to_date", "A app está atualizada")
                     result(null)
                     return@execute
                 }
@@ -69,8 +73,10 @@ object UpdateChecker {
                         }
                     }
                 }
+                setStatus(context, "available", "DriveDeck $remoteVersion disponível")
                 result(UpdateInfo(remoteVersion, release.optString("body"), release.optString("html_url"), apkUrl))
             } catch (_: Exception) {
+                setStatus(context, "check_failed", "Não foi possível verificar atualizações agora")
                 result(null)
             } finally {
                 connection?.disconnect()
@@ -91,6 +97,14 @@ object UpdateChecker {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .remove(PENDING_UPDATE_VERSION)
             .remove(PENDING_UPDATE_DOWNLOAD_ID)
+            .apply()
+    }
+
+    @JvmStatic
+    fun setStatus(context: Context, status: String, detail: String = "") {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(LAST_UPDATE_STATUS, status)
+            .putString(LAST_UPDATE_STATUS_DETAIL, detail)
             .apply()
     }
 

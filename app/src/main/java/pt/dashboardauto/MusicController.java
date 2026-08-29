@@ -12,6 +12,7 @@ import android.os.Looper;
 import java.util.List;
 
 public final class MusicController {
+    private static final String LAST_KNOWN_TRACK = "last_known_track";
     private MusicController() { }
 
     public static void playPause(Context context) { withSelected(context, controller -> {
@@ -38,8 +39,11 @@ public final class MusicController {
             selected.getTransportControls().play();
             return;
         }
-        if (attempt >= 5) return;
-        long delay = attempt == 0 ? 700L : 900L;
+        // Players como o YouTube Music podem publicar a MediaSession só
+        // depois de a Activity e o serviço de áudio arrancarem. A janela de
+        // recuperação é curta, mas suficientemente longa para o Bluetooth.
+        if (attempt >= 8) return;
+        long delay = attempt == 0 ? 700L : 850L;
         new Handler(Looper.getMainLooper()).postDelayed(() -> playWhenReady(context, attempt + 1), delay);
     }
 
@@ -56,6 +60,11 @@ public final class MusicController {
         return result[0];
     }
 
+    /** Used by the settings diagnostics without exposing the controller itself. */
+    public static boolean hasUsableSession(Context context) {
+        return selectedController(context, false) != null;
+    }
+
     public static String currentTrack(Context context) {
         final String[] result = {"Sem música ativa"};
         withSelected(context, controller -> {
@@ -64,8 +73,17 @@ public final class MusicController {
             CharSequence artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_ARTIST);
             if (TextUtils.isEmpty(artist)) artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
             if (TextUtils.isEmpty(artist)) artist = controller.getMetadata().getText(android.media.MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
-            if (!TextUtils.isEmpty(title)) result[0] = title + (TextUtils.isEmpty(artist) ? "" : "\n" + artist);
+            if (!TextUtils.isEmpty(title)) {
+                result[0] = title + (TextUtils.isEmpty(artist) ? "" : "\n" + artist);
+                context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE)
+                        .edit().putString(LAST_KNOWN_TRACK, result[0]).apply();
+            }
         });
+        if ("Sem música ativa".equals(result[0])) {
+            String cached = context.getSharedPreferences("dashboard_auto", Context.MODE_PRIVATE)
+                    .getString(LAST_KNOWN_TRACK, "");
+            if (cached != null && !cached.isEmpty()) result[0] = cached;
+        }
         return result[0];
     }
 

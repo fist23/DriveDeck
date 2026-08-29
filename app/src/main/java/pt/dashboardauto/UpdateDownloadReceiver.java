@@ -19,6 +19,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
             if (path != null) new File(path).delete();
             UpdateChecker.clearPendingDownload(context);
             UpdateChecker.cleanupTemporaryDownloads(context);
+            UpdateChecker.setStatus(context, "installed", "Atualização concluída");
             return;
         }
         if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
@@ -36,6 +37,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
                     || cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                     != DownloadManager.STATUS_SUCCESSFUL) {
                 UpdateChecker.clearPendingDownload(context);
+                UpdateChecker.setStatus(context, "failed", "O download não foi concluído");
                 return;
             }
         } catch (RuntimeException ignored) {
@@ -47,6 +49,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         Uri apkUri = manager.getUriForDownloadedFile(id);
         if (apkUri == null) {
             UpdateChecker.clearPendingDownload(context);
+            UpdateChecker.setStatus(context, "failed", "O Android não encontrou o APK descarregado");
             return;
         }
         String version = context.getSharedPreferences(UpdateChecker.PREFS_NAME, Context.MODE_PRIVATE)
@@ -56,6 +59,10 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         try {
             if (!directory.exists() && !directory.mkdirs()) throw new IOException("Cannot create update cache");
             copyToCache(context, apkUri, temporaryApk);
+            if (!isCompatibleApk(context, temporaryApk)) {
+                throw new IOException("Downloaded APK does not match DriveDeck signature");
+            }
+            UpdateChecker.setStatus(context, "installing", "A abrir o instalador do Android");
             // Keep the private temporary file alive while the system installer reads it.
             // It is removed on the next download, so the update never becomes permanent
             // user storage.
@@ -66,6 +73,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
             temporaryApk.delete();
             UpdateChecker.clearPendingDownload(context);
             UpdateChecker.cleanupTemporaryDownloads(context);
+            UpdateChecker.setStatus(context, "failed", "Não foi possível validar ou abrir o APK");
         }
     }
 
@@ -82,6 +90,43 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
             int count;
             while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
             output.getFD().sync();
+        }
+    }
+
+    private static boolean isCompatibleApk(Context context, File apk) {
+        try {
+            android.content.pm.PackageManager packageManager = context.getPackageManager();
+            android.content.pm.Signature[] installedSigners;
+            android.content.pm.Signature[] candidateSigners;
+            android.content.pm.PackageInfo installed;
+            android.content.pm.PackageInfo candidate;
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                int flags = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES;
+                installed = packageManager.getPackageInfo(context.getPackageName(), flags);
+                candidate = packageManager.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+                if (candidate == null || installed.signingInfo == null || candidate.signingInfo == null) return false;
+                installedSigners = installed.signingInfo.getApkContentsSigners();
+                candidateSigners = candidate.signingInfo.getApkContentsSigners();
+            } else {
+                @SuppressWarnings("deprecation") int flags = android.content.pm.PackageManager.GET_SIGNATURES;
+                installed = packageManager.getPackageInfo(context.getPackageName(), flags);
+                candidate = packageManager.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+                if (candidate == null) return false;
+                installedSigners = installed.signatures;
+                candidateSigners = candidate.signatures;
+            }
+            if (!context.getPackageName().equals(candidate.packageName)) return false;
+            if (installedSigners == null || candidateSigners == null || installedSigners.length != candidateSigners.length) return false;
+            for (android.content.pm.Signature signer : installedSigners) {
+                boolean found = false;
+                for (android.content.pm.Signature candidateSigner : candidateSigners) {
+                    if (signer.equals(candidateSigner)) { found = true; break; }
+                }
+                if (!found) return false;
+            }
+            return true;
+        } catch (Exception | LinkageError ignored) {
+            return false;
         }
     }
 

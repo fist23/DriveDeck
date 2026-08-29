@@ -94,6 +94,10 @@ public class OverlayService extends Service {
     private final android.os.Handler refreshHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable refreshTrack = new Runnable() {
         @Override public void run() {
+            if (overlay == null && !miniPlayerHidden && !layoutTransitionRunning
+                    && PermissionManager.canDrawOverlay(OverlayService.this)) {
+                addOverlay();
+            }
             updateTrack();
             refreshHandler.postDelayed(this, 1000);
         }

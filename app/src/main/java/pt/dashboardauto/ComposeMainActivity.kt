@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Place
@@ -265,6 +266,7 @@ class ComposeMainActivity : ComponentActivity() {
         if (previousDownload >= 0L) manager.remove(previousDownload)
         UpdateChecker.clearPendingDownload(this)
         UpdateChecker.cleanupTemporaryDownloads(this)
+        UpdateChecker.setStatus(this, "downloading", "A descarregar DriveDeck ${info.version}")
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("DriveDeck ${info.version}")
             .setDescription("A descarregar atualização")
@@ -350,23 +352,69 @@ class ComposeMainActivity : ComponentActivity() {
         val musicAvailable = apps.any { it.packageName == music }
         val navLabel = apps.firstOrNull { it.packageName == navigation }?.label ?: "Escolher navegação"
         val musicLabel = apps.firstOrNull { it.packageName == music }?.label ?: "Escolher música"
-        Scaffold(containerColor = Color(0xFF0A0A0E), topBar = { TopAppBar(title = { Text("DriveDeck", fontWeight = FontWeight.Bold) }, actions = { IconButton(onClick = { settings = !settings }) { Icon(Icons.Rounded.Settings, "Definições") } }) }) { padding ->
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Image(
-                    painter = painterResource(R.drawable.drivedeck_logo),
-                    contentDescription = "DriveDeck",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().height(120.dp)
+        val bluetoothReady = bluetoothAddress.isNotBlank() && bluetooth.any { it.address == bluetoothAddress }
+        val setupReady = navigationAvailable && musicAvailable && bluetoothReady
+            && PermissionManager.canDrawOverlay(this@ComposeMainActivity)
+            && PermissionManager.canConnectBluetooth(this@ComposeMainActivity)
+            && PermissionManager.canPostNotifications(this@ComposeMainActivity)
+            && PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)
+            && PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)
+        Scaffold(
+            containerColor = Color(0xFF0A0A0E),
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (settings) "Definições avançadas" else "DriveDeck", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        if (settings) IconButton(onClick = { settings = false }) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar")
+                        }
+                    },
+                    actions = {
+                        if (!settings) IconButton(onClick = { settings = true }) {
+                            Icon(Icons.Rounded.Settings, "Definições avançadas")
+                        }
+                    }
                 )
-                Text("CAR MODE", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                Text("Pronto para conduzir", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) })
-                ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) })
-                if (!navigationAvailable || !musicAvailable) {
-                    Text("Uma das apps configuradas já não está instalada. Abre as definições para escolher novamente.", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
-                }
-                Button(onClick = onStart, enabled = navigationAvailable && musicAvailable, modifier = Modifier.fillMaxWidth().height(58.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) { Icon(Icons.Rounded.Home, null); Spacer(Modifier.size(8.dp)); Text("Iniciar Car Mode") }
-                AnimatedVisibility(settings, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            }
+        ) { padding ->
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!settings) {
+                    Image(
+                        painter = painterResource(R.drawable.drivedeck_logo),
+                        contentDescription = "DriveDeck",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().height(120.dp)
+                    )
+                    Text("CAR MODE", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                    Text("Pronto para conduzir", color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = if (setupReady) Color(0xFF123522) else Color(0xFF382B1A)),
+                        modifier = Modifier.fillMaxWidth().clickable { settings = true }
+                    ) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (setupReady) Icons.Rounded.Check else Icons.Rounded.Settings,
+                                contentDescription = null,
+                                tint = if (setupReady) Color(0xFF30D158) else Color(0xFFFFB340),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(Modifier.padding(start = 10.dp)) {
+                                Text(if (setupReady) "Tudo pronto para conduzir" else "Completar configuração", color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (setupReady) "Apps, Bluetooth e permissões essenciais ativos" else "Toque para abrir as definições avançadas",
+                                    color = Color(0xFFCACAD2),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                    ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) })
+                    ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) })
+                    if (!navigationAvailable || !musicAvailable) {
+                        Text("Uma das apps configuradas já não está instalada. Abre as definições avançadas para escolher novamente.", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(onClick = onStart, enabled = navigationAvailable && musicAvailable, modifier = Modifier.fillMaxWidth().height(58.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) { Icon(Icons.Rounded.Home, null); Spacer(Modifier.size(8.dp)); Text("Iniciar Car Mode") }
+                } else {
                     SettingsPanel(
                         apps = apps,
                         bluetooth = bluetooth,
@@ -378,11 +426,14 @@ class ComposeMainActivity : ComponentActivity() {
                         onBluetooth = onBluetooth,
                         updateInfo = updateInfo,
                         onOpenUpdate = onOpenUpdate,
+                        onRefreshDiagnostics = {
+                            permissionRevision++
+                            UpdateChecker.check(this@ComposeMainActivity) { info -> runOnUiThread { this@ComposeMainActivity.updateInfo = info } }
+                        },
                         accentKey = accentKey,
                         onAccent = onAccent
                     )
                 }
-                OutlinedButton(onClick = { settings = !settings }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Rounded.Build, null); Spacer(Modifier.size(8.dp)); Text(if (settings) "Fechar definições" else "Abrir definições") }
             }
         }
     }
@@ -399,6 +450,7 @@ class ComposeMainActivity : ComponentActivity() {
         onBluetooth: (String) -> Unit,
         updateInfo: UpdateChecker.UpdateInfo?,
         onOpenUpdate: () -> Unit,
+        onRefreshDiagnostics: () -> Unit,
         accentKey: String,
         onAccent: (String) -> Unit
     ) {
@@ -449,6 +501,7 @@ class ComposeMainActivity : ComponentActivity() {
                         PermissionButton("Toque na Dynamic Island", PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) { PermissionManager.openAccessibilitySettings(this@ComposeMainActivity) }
                         PermissionButton("Estado do telefone", PermissionManager.canReadPhoneState(this@ComposeMainActivity)) { PermissionManager.requestPhoneState(this@ComposeMainActivity) }
                         PermissionButton("Fotos dos contactos", PermissionManager.canReadContacts(this@ComposeMainActivity)) { PermissionManager.requestContacts(this@ComposeMainActivity) }
+                        PermissionButton("Otimização da bateria", PermissionManager.isIgnoringBatteryOptimizations(this@ComposeMainActivity)) { PermissionManager.openBatterySettings(this@ComposeMainActivity) }
                         if (missingSetup.isNotEmpty()) Text("Ativa as permissões em falta antes de iniciar o Car Mode para garantir o funcionamento do player e da automação.", color = Color(0xFFFFB340), style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -473,7 +526,52 @@ class ComposeMainActivity : ComponentActivity() {
                         }
                     }
                 }
+                var diagnosticsOpen by remember { mutableStateOf(false) }
+                var diagnosticsRefresh by remember { mutableIntStateOf(0) }
+                SettingsSectionHeader("Diagnóstico", "Verifica rapidamente o estado real da app", diagnosticsOpen) { diagnosticsOpen = !diagnosticsOpen }
+                AnimatedVisibility(diagnosticsOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                    val bluetoothConnected = prefs.getBoolean("selected_bluetooth_connected", false)
+                    val bluetoothEvent = prefs.getString("bluetooth_last_event", "")
+                        ?.replace("connected:", "Ligado · ")
+                        ?.replace("disconnected:", "Desligado · ")
+                        ?.ifBlank { "Nenhum evento recebido" } ?: "Nenhum evento recebido"
+                    val updateStatus = prefs.getString(UpdateChecker.LAST_UPDATE_STATUS_DETAIL, "") ?: ""
+                    val updateStatusKey = prefs.getString(UpdateChecker.LAST_UPDATE_STATUS, "") ?: ""
+                    val updateHealthy = updateStatusKey != "check_failed" && updateStatusKey != "failed"
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        DiagnosticRow("Configuração base", setupReady, if (setupReady) "Pronta para conduzir" else "Faltam opções ou permissões")
+                        DiagnosticRow("Bluetooth selecionado", selectedBluetoothAvailable, if (bluetoothConnected) "Ligado" else "Selecionado, não ligado")
+                        Text("Último evento Bluetooth: $bluetoothEvent", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.labelSmall)
+                        DiagnosticRow("Sessão de música", MusicController.hasUsableSession(this@ComposeMainActivity), "MediaSession detetada", "Nenhuma MediaSession disponível")
+                        DiagnosticRow("Bateria em segundo plano", PermissionManager.isIgnoringBatteryOptimizations(this@ComposeMainActivity), "Sem restrições", "Pode suspender o Bluetooth")
+                        DiagnosticRow("Atualizações", updateHealthy, if (updateInfo == null) "Sem atualização pendente" else "Nova versão disponível", "Verificação falhou")
+                        if (updateStatus.isNotBlank()) Text("Última atualização: $updateStatus", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.labelSmall)
+                        OutlinedButton(onClick = {
+                            diagnosticsRefresh++
+                            onRefreshDiagnostics()
+                            OverlayService.rebuildIfActive(this@ComposeMainActivity)
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Rounded.Build, contentDescription = null)
+                            Spacer(Modifier.size(8.dp))
+                            Text(if (diagnosticsRefresh == 0) "Testar novamente" else "Diagnóstico atualizado")
+                        }
+                    }
+                }
                 Text("Aparência", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                var drivingProfile by remember { mutableStateOf(prefs.getString("driving_profile", "standard") ?: "standard") }
+                Text("Perfil de condução", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                ProfilePicker(drivingProfile) { profile ->
+                    drivingProfile = profile
+                    val (profileAccent, profileSize, profilePosition) = when (profile) {
+                        "night" -> Triple("purple", "compact", "center")
+                        "tablet" -> Triple("blue", "large", "center")
+                        else -> Triple("blue", "normal", "center")
+                    }
+                    controlSize = profileSize
+                    islandPosition = profilePosition
+                    prefs.edit().putString("driving_profile", profile).putString("overlay_control_size", profileSize).putString("overlay_position", profilePosition).apply()
+                    onAccent(profileAccent)
+                }
                 AccentPicker(accentKey, onAccent)
                 updateInfo?.let { info ->
                     OutlinedButton(onClick = onOpenUpdate, modifier = Modifier.fillMaxWidth()) {
@@ -554,14 +652,25 @@ class ComposeMainActivity : ComponentActivity() {
         // Se a deteção automática não reconhecer a app (rádio, player OEM, etc.),
         // continua disponível através da lista completa de apps instaladas.
         val suggestedAudioApps = apps.filter { matchesCategory(it, AppCategory.MUSIC) }
-        val audioApps = if (suggestedAudioApps.isNotEmpty()) suggestedAudioApps else apps
         var favorites by remember {
             mutableStateOf(prefs.getString("audio_favorites", "").orEmpty().split(",").filter(String::isNotBlank).toSet())
         }
+        var showAll by remember { mutableStateOf(false) }
+        val selectedOutsideSuggestions = apps.filter { it.packageName in favorites && it !in suggestedAudioApps }
+        val audioApps = if (showAll || suggestedAudioApps.isEmpty()) {
+            apps
+        } else {
+            (suggestedAudioApps + selectedOutsideSuggestions).distinctBy { it.packageName }
+        }.sortedWith(compareByDescending<AppItem> { it.packageName in favorites }.thenBy { it.label.lowercase(Locale.ROOT) })
         if (audioApps.isEmpty()) return
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Apps de áudio favoritas", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             Text("Escolhe várias para trocar rapidamente no player expandido.", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodySmall)
+            if (suggestedAudioApps.isNotEmpty() && suggestedAudioApps.size < apps.size) {
+                TextButton(onClick = { showAll = !showAll }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (showAll) "Mostrar apenas sugestões" else "Ver todas as apps instaladas")
+                }
+            }
             audioApps.forEach { app ->
                 SettingsRow(Icons.Rounded.PlayArrow, app.label, favorites.contains(app.packageName)) {
                     favorites = if (favorites.contains(app.packageName)) favorites - app.packageName else favorites + app.packageName
@@ -674,6 +783,25 @@ class ComposeMainActivity : ComponentActivity() {
         }
     }
 
+    @Composable
+    private fun ProfilePicker(value: String, onChange: (String) -> Unit) {
+        var menuExpanded by remember { mutableStateOf(false) }
+        val label = when (value) {
+            "night" -> "Noite — discreto e compacto"
+            "tablet" -> "Tablet — controlos maiores"
+            else -> "Normal — equilíbrio para condução"
+        }
+        OutlinedButton(onClick = { menuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(label, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Escolher perfil de condução")
+        }
+        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+            DropdownMenuItem(text = { Text("Normal — equilíbrio para condução") }, onClick = { onChange("standard"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Noite — discreto e compacto") }, onClick = { onChange("night"); menuExpanded = false })
+            DropdownMenuItem(text = { Text("Tablet — controlos maiores") }, onClick = { onChange("tablet"); menuExpanded = false })
+        }
+    }
+
     private fun accentLabel(key: String): String = when (key) {
         "pink" -> "Rosa — DriveDeck"
         "green" -> "Verde — calmo"
@@ -744,6 +872,20 @@ class ComposeMainActivity : ComponentActivity() {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             Text(title, color = Color.White, modifier = Modifier.weight(1f).padding(horizontal = 12.dp))
             Switch(checked = checked, onCheckedChange = null)
+        }
+    }
+
+    @Composable
+    private fun DiagnosticRow(title: String, ok: Boolean, okLabel: String, errorLabel: String = "Requer atenção") {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (ok) Icons.Rounded.Check else Icons.Rounded.Settings,
+                contentDescription = null,
+                tint = if (ok) Color(0xFF30D158) else Color(0xFFFFB340),
+                modifier = Modifier.size(20.dp)
+            )
+            Text(title, color = Color.White, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+            Text(if (ok) okLabel else errorLabel, color = if (ok) Color(0xFF9BE9AD) else Color(0xFFFFC56B), style = MaterialTheme.typography.labelSmall)
         }
     }
 
