@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -19,12 +20,15 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -295,7 +299,7 @@ class ComposeMainActivity : ComponentActivity() {
         val permissionStateRevision = permissionRevision
         var autoBluetooth by remember { mutableStateOf(prefs.getBoolean("auto_bluetooth", false)) }
         Scaffold(containerColor = Color(0xFF0A0A0E)) { padding ->
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Image(
                     painter = painterResource(R.drawable.drivedeck_logo),
                     contentDescription = "DriveDeck",
@@ -348,6 +352,7 @@ class ComposeMainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, onOpenUpdate: () -> Unit, accentKey: String, onAccent: (String) -> Unit) {
         var settings by remember { mutableStateOf(false) }
+        BackHandler(enabled = settings) { settings = false }
         val navigationAvailable = apps.any { it.packageName == navigation }
         val musicAvailable = apps.any { it.packageName == music }
         val navLabel = apps.firstOrNull { it.packageName == navigation }?.label ?: "Escolher navegação"
@@ -377,7 +382,7 @@ class ComposeMainActivity : ComponentActivity() {
                 )
             }
         ) { padding ->
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(padding).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (!settings) {
                     Image(
                         painter = painterResource(R.drawable.drivedeck_logo),
@@ -408,8 +413,19 @@ class ComposeMainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) })
-                    ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) })
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        if (maxWidth >= 600.dp) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(Modifier.weight(1f)) { ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) }) }
+                                Box(Modifier.weight(1f)) { ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) }) }
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                ActionCard(Icons.Rounded.Place, "Abrir navegação", navLabel, { launchPackage(navigation) })
+                                ActionCard(Icons.Rounded.PlayArrow, "Abrir música", musicLabel, { launchPackage(music) })
+                            }
+                        }
+                    }
                     if (!navigationAvailable || !musicAvailable) {
                         Text("Uma das apps configuradas já não está instalada. Abre as definições avançadas para escolher novamente.", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
                     }
@@ -528,6 +544,8 @@ class ComposeMainActivity : ComponentActivity() {
                 }
                 var diagnosticsOpen by remember { mutableStateOf(false) }
                 var diagnosticsRefresh by remember { mutableIntStateOf(0) }
+                var fullTestResult by remember { mutableStateOf<String?>(null) }
+                var detectedTrack by remember { mutableStateOf("") }
                 SettingsSectionHeader("Diagnóstico", "Verifica rapidamente o estado real da app", diagnosticsOpen) { diagnosticsOpen = !diagnosticsOpen }
                 AnimatedVisibility(diagnosticsOpen, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                     val bluetoothConnected = prefs.getBoolean("selected_bluetooth_connected", false)
@@ -543,17 +561,41 @@ class ComposeMainActivity : ComponentActivity() {
                         DiagnosticRow("Bluetooth selecionado", selectedBluetoothAvailable, if (bluetoothConnected) "Ligado" else "Selecionado, não ligado")
                         Text("Último evento Bluetooth: $bluetoothEvent", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.labelSmall)
                         DiagnosticRow("Sessão de música", MusicController.hasUsableSession(this@ComposeMainActivity), "MediaSession detetada", "Nenhuma MediaSession disponível")
+                        if (detectedTrack.isNotBlank()) Text("Faixa detetada: ${detectedTrack.replace("\n", " · ")}", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.labelSmall)
                         DiagnosticRow("Bateria em segundo plano", PermissionManager.isIgnoringBatteryOptimizations(this@ComposeMainActivity), "Sem restrições", "Pode suspender o Bluetooth")
                         DiagnosticRow("Atualizações", updateHealthy, if (updateInfo == null) "Sem atualização pendente" else "Nova versão disponível", "Verificação falhou")
                         if (updateStatus.isNotBlank()) Text("Última atualização: $updateStatus", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.labelSmall)
+                        fullTestResult?.let { result ->
+                            Text(result, color = if (result.startsWith("✓")) Color(0xFF30D158) else Color(0xFFFFB340), style = MaterialTheme.typography.bodySmall)
+                        }
                         OutlinedButton(onClick = {
                             diagnosticsRefresh++
+                            val missingChecks = buildList {
+                                if (!apps.any { it.packageName == navigation }) add("navegação")
+                                if (!apps.any { it.packageName == music }) add("música")
+                                if (!selectedBluetoothAvailable) add("Bluetooth do carro")
+                                if (!PermissionManager.canDrawOverlay(this@ComposeMainActivity)) add("overlay")
+                                if (!PermissionManager.canConnectBluetooth(this@ComposeMainActivity)) add("Bluetooth")
+                                if (!PermissionManager.canPostNotifications(this@ComposeMainActivity)) add("notificações")
+                                if (!PermissionManager.isMediaAccessEnabled(this@ComposeMainActivity)) add("controlos de música")
+                                if (!PermissionManager.isIslandAccessibilityEnabled(this@ComposeMainActivity)) add("toque na Dynamic Island")
+                            }
+                            fullTestResult = if (missingChecks.isEmpty()) {
+                                "✓ Verificação concluída: tudo pronto para conduzir"
+                            } else {
+                                "Falta corrigir: ${missingChecks.joinToString(", ")}"
+                            }
+                            detectedTrack = if (MusicController.hasUsableSession(this@ComposeMainActivity)) {
+                                MusicController.currentTrack(this@ComposeMainActivity)
+                            } else {
+                                ""
+                            }
                             onRefreshDiagnostics()
                             OverlayService.rebuildIfActive(this@ComposeMainActivity)
                         }, modifier = Modifier.fillMaxWidth()) {
                             Icon(Icons.Rounded.Build, contentDescription = null)
                             Spacer(Modifier.size(8.dp))
-                            Text(if (diagnosticsRefresh == 0) "Testar novamente" else "Diagnóstico atualizado")
+                            Text(if (diagnosticsRefresh == 0) "Executar verificação completa" else "Executar novamente")
                         }
                     }
                 }
@@ -666,6 +708,11 @@ class ComposeMainActivity : ComponentActivity() {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Apps de áudio favoritas", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             Text("Escolhe várias para trocar rapidamente no player expandido.", color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodySmall)
+            Text(
+                if (favorites.isEmpty()) "Nenhuma favorita selecionada" else "${favorites.size} favorita(s) selecionada(s)",
+                color = Color(0xFFAAAAB4),
+                style = MaterialTheme.typography.labelSmall
+            )
             if (suggestedAudioApps.isNotEmpty() && suggestedAudioApps.size < apps.size) {
                 TextButton(onClick = { showAll = !showAll }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (showAll) "Mostrar apenas sugestões" else "Ver todas as apps instaladas")
@@ -747,7 +794,7 @@ class ComposeMainActivity : ComponentActivity() {
     @Composable
     private fun PermissionButton(label: String, granted: Boolean, onClick: () -> Unit) {
         OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Icon(if (granted) Icons.Rounded.Check else Icons.Rounded.Settings, null)
+            Icon(if (granted) Icons.Rounded.Check else Icons.Rounded.Settings, if (granted) "$label permitido" else "Permitir $label")
             Spacer(Modifier.size(8.dp))
             Text(if (granted) "$label · permitido" else "Permitir $label", modifier = Modifier.weight(1f))
         }
@@ -860,7 +907,7 @@ class ComposeMainActivity : ComponentActivity() {
     private fun ActionCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
         Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1B22)), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                Icon(icon, title, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
                 Column(Modifier.padding(start = 16.dp)) { Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium); Text(subtitle, color = Color(0xFFAAAAB4), style = MaterialTheme.typography.bodyMedium) }
             }
         }
@@ -869,9 +916,9 @@ class ComposeMainActivity : ComponentActivity() {
     @Composable
     private fun SettingsRow(icon: ImageVector, title: String, checked: Boolean, onClick: () -> Unit) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            Icon(icon, title, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             Text(title, color = Color.White, modifier = Modifier.weight(1f).padding(horizontal = 12.dp))
-            Switch(checked = checked, onCheckedChange = null)
+            Switch(checked = checked, onCheckedChange = { onClick() })
         }
     }
 
