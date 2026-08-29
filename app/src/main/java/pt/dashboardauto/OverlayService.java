@@ -555,9 +555,11 @@ public class OverlayService extends Service {
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
                     content.setScaleX(1f);
-                    content.setScaleY(expanded ? .86f : .90f);
-                    content.setTranslationY(expanded ? -dp(10) : dp(3));
-                    content.setAlpha(0f);
+                    // A expansão é vertical: nasce comprimida no topo e
+                    // cresce para baixo sem mover a capa lateralmente.
+                    content.setScaleY(expanded ? .72f : .90f);
+                    content.setTranslationY(expanded ? -dp(20) : dp(3));
+                    content.setAlpha(1f);
                     if (!expanded) {
                         // A pill está no lado direito da caixa fixa. O pivô
                         // mantém a animação centrada nela, e não no espaço
@@ -580,8 +582,9 @@ public class OverlayService extends Service {
                             .scaleY(1f)
                             .translationY(0f)
                             .alpha(1f)
-                            .setInterpolator(new OvershootInterpolator(1.65f))
-                            .setDuration(expanded ? 560 : 460)
+                            .setInterpolator(expanded ? new SpringInterpolator(8f, 14f)
+                                    : new SpringInterpolator(10f, 12f))
+                            .setDuration(expanded ? 720 : 420)
                             .start();
                     overlay.animate()
                             .alpha(1f)
@@ -589,7 +592,7 @@ public class OverlayService extends Service {
                             .scaleY(1f)
                             .translationY(0f)
                             .setInterpolator(new DecelerateInterpolator(1.4f))
-                            .setDuration(expanded ? 340 : 240)
+                            .setDuration(expanded ? 180 : 180)
                             .start();
                 });
             });
@@ -732,9 +735,7 @@ public class OverlayService extends Service {
         boolean trackChanged = textChanged || keyChanged;
         lastTrackValue = value;
         lastTrackKey = trackKey;
-        long previousArtworkSignature = renderedArtworkSignature;
         if (trackChanged) animateTrackChange(value); else renderTrack(value, true);
-        if (!trackChanged && previousArtworkSignature != renderedArtworkSignature) animateTrackChange(value);
         MusicController.PlaybackInfo playback = MusicController.playbackInfo(this);
         if (android.os.SystemClock.uptimeMillis() >= optimisticPlaybackUntil) playingState = playback.playing;
         setPlayButtonState(playingState, false);
@@ -838,10 +839,11 @@ public class OverlayService extends Service {
         pendingTrackValue = null;
         FrameLayout transitionOverlay = overlay;
         android.view.View transitionContainer = musicInfoContainer;
-        float distance = Math.max(dp(72), transitionContainer.getWidth() * .42f);
         transitionContainer.animate()
-                .translationX(-distance)
-                .translationY(-dp(5))
+                // A troca de faixa permanece no eixo vertical para não
+                // arrastar a capa/media para fora da ilha.
+                .translationX(0f)
+                .translationY(-dp(8))
                 .scaleX(.96f)
                 .scaleY(.96f)
                 .alpha(.12f)
@@ -853,8 +855,8 @@ public class OverlayService extends Service {
                         return;
                     }
                     renderTrack(value);
-                    transitionContainer.setTranslationX(distance);
-                    transitionContainer.setTranslationY(dp(5));
+                    transitionContainer.setTranslationX(0f);
+                    transitionContainer.setTranslationY(dp(8));
                     transitionContainer.setScaleX(.96f);
                     transitionContainer.setScaleY(.96f);
                     transitionContainer.animate()
@@ -864,7 +866,7 @@ public class OverlayService extends Service {
                             .scaleY(1f)
                             .alpha(1f)
                             .setDuration(460)
-                            .setInterpolator(new OvershootInterpolator(1.35f))
+                            .setInterpolator(new SpringInterpolator(9f, 13f))
                             .withEndAction(() -> {
                                 if (overlay != transitionOverlay || musicInfoContainer != transitionContainer) {
                                     trackTransitionRunning = false;
@@ -905,7 +907,7 @@ public class OverlayService extends Service {
         playerContent.setLayoutParams(contentParams);
         android.animation.ValueAnimator opening = android.animation.ValueAnimator.ofInt(compactHeight, revealHeight);
         opening.setDuration(520L);
-        opening.setInterpolator(new OvershootInterpolator(1.65f));
+        opening.setInterpolator(new SpringInterpolator(8f, 14f));
         opening.addUpdateListener(animation -> {
             int height = (Integer) animation.getAnimatedValue();
             containerParams.height = height;
@@ -919,7 +921,7 @@ public class OverlayService extends Service {
                 if (animationToken != trackAnimationToken || compactTrackDetails != details) return;
                 details.animate().alpha(1f).translationY(0f).scaleY(1f)
                         .setDuration(300L)
-                        .setInterpolator(new OvershootInterpolator(1.25f))
+                        .setInterpolator(new SpringInterpolator(10f, 13f))
                         .start();
                 refreshHandler.postDelayed(() -> {
                     if (animationToken != trackAnimationToken || compactTrackDetails != details) return;
@@ -927,7 +929,7 @@ public class OverlayService extends Service {
                             .setDuration(180L).start();
                     android.animation.ValueAnimator closing = android.animation.ValueAnimator.ofInt(revealHeight, compactHeight);
                     closing.setDuration(420L);
-                    closing.setInterpolator(new OvershootInterpolator(.85f));
+                    closing.setInterpolator(new SpringInterpolator(10f, 12f));
                     closing.addUpdateListener(close -> {
                         int height = (Integer) close.getAnimatedValue();
                         containerParams.height = height;
@@ -1389,6 +1391,23 @@ public class OverlayService extends Service {
         String size = getSharedPreferences("dashboard_auto", MODE_PRIVATE).getString("overlay_control_size", "normal");
         float factor = "compact".equals(size) ? .90f : ("large".equals(size) ? 1.12f : 1f);
         return Math.max(dp(2), Math.round(dp(value) * factor));
+    }
+
+    /** Mola amortecida curta: tensão visível, mas sem oscilações longas. */
+    private static final class SpringInterpolator implements android.view.animation.Interpolator {
+        private final float damping;
+        private final float frequency;
+
+        SpringInterpolator(float damping, float frequency) {
+            this.damping = damping;
+            this.frequency = frequency;
+        }
+
+        @Override public float getInterpolation(float input) {
+            if (input <= 0f) return 0f;
+            if (input >= 1f) return 1f;
+            return (float) (1d - Math.exp(-damping * input) * Math.cos(frequency * input));
+        }
     }
 
     private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + .5f); }
