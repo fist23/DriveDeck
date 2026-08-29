@@ -554,7 +554,10 @@ public class OverlayService extends Service {
                     // a entrada. Escalar o conteúdo antes de o alinhar fazia o
                     // WindowManager recalcular x/y e podia esconder a direita
                     // da ilha atrás do recorte da câmara.
-                    content.setScaleX(1f);
+                    // A compacta assenta com uma pequena compressão radial;
+                    // a expansão mantém a largura estável e cresce apenas
+                    // para baixo.
+                    content.setScaleX(expanded ? 1f : .86f);
                     // A expansão é vertical: nasce comprimida no topo e
                     // cresce para baixo sem mover a capa lateralmente.
                     content.setScaleY(expanded ? .72f : .90f);
@@ -584,7 +587,7 @@ public class OverlayService extends Service {
                             .alpha(1f)
                             .setInterpolator(expanded ? new SpringInterpolator(8f, 14f)
                                     : new SpringInterpolator(10f, 12f))
-                            .setDuration(expanded ? 720 : 420)
+                            .setDuration(expanded ? 720 : 520)
                             .start();
                     overlay.animate()
                             .alpha(1f)
@@ -1421,10 +1424,16 @@ public class OverlayService extends Service {
             overlay.animate().cancel();
             overlay.setTranslationX(0f);
             overlay.setTranslationY(0f);
+            overlay.setScaleX(1f);
+            overlay.setScaleY(1f);
+            overlay.setAlpha(1f);
         }
         if (musicInfoContainer != null) {
             musicInfoContainer.animate().cancel();
             musicInfoContainer.setTranslationX(0f);
+            musicInfoContainer.setTranslationY(0f);
+            musicInfoContainer.setScaleX(1f);
+            musicInfoContainer.setScaleY(1f);
             musicInfoContainer.setAlpha(1f);
         }
         if (artwork != null) {
@@ -1506,13 +1515,20 @@ public class OverlayService extends Service {
             overlay.setPivotX(overlay.getWidth() / 2f);
             overlay.setPivotY(0f);
         }
+        // Ao fechar, a caixa expandida encolhe para o ponto superior central
+        // como um efeito genio. A nova pill compacta é criada de seguida e
+        // faz o assentamento elástico no seu próprio espaço.
+        overlay.setPivotX(overlay.getWidth() / 2f);
+        overlay.setPivotY(0f);
         overlay.animate()
-                .alpha(0f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .translationY(nextState ? -dp(8) : -dp(12))
-                .setInterpolator(new OvershootInterpolator(nextState ? 1.1f : 1.25f))
-                .setDuration(nextState ? 180 : 210)
+                .alpha(nextState ? 0f : .18f)
+                .scaleX(nextState ? 1f : .38f)
+                .scaleY(nextState ? 1f : .12f)
+                .translationY(nextState ? -dp(8) : -dp(4))
+                .setInterpolator(nextState
+                        ? new DecelerateInterpolator(1.6f)
+                        : new AccelerateInterpolator(1.6f))
+                .setDuration(nextState ? 180 : 330)
                 .withEndAction(() -> {
             expanded = nextState;
             getSharedPreferences("dashboard_auto", MODE_PRIVATE).edit().putBoolean("overlay_expanded", expanded).apply();
