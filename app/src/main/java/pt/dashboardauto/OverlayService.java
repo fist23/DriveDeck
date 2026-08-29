@@ -557,11 +557,11 @@ public class OverlayService extends Service {
                     // A compacta assenta com uma pequena compressão radial;
                     // a expansão mantém a largura estável e cresce apenas
                     // para baixo.
-                    content.setScaleX(expanded ? 1f : .86f);
+                    content.setScaleX(expanded ? 1f : .92f);
                     // A expansão é vertical: nasce comprimida no topo e
                     // cresce para baixo sem mover a capa lateralmente.
-                    content.setScaleY(expanded ? .72f : .90f);
-                    content.setTranslationY(expanded ? -dp(20) : dp(3));
+                    content.setScaleY(expanded ? .72f : .94f);
+                    content.setTranslationY(expanded ? -dp(20) : dp(1));
                     content.setAlpha(1f);
                     if (!expanded) {
                         // A pill está no lado direito da caixa fixa. O pivô
@@ -586,8 +586,8 @@ public class OverlayService extends Service {
                             .translationY(0f)
                             .alpha(1f)
                             .setInterpolator(expanded ? new SpringInterpolator(8f, 14f)
-                                    : new SpringInterpolator(10f, 12f))
-                            .setDuration(expanded ? 720 : 520)
+                                    : new SpringInterpolator(11f, 11f))
+                            .setDuration(expanded ? 720 : 420)
                             .start();
                     overlay.animate()
                             .alpha(1f)
@@ -1257,21 +1257,26 @@ public class OverlayService extends Service {
         if (selected == null) return dp(8);
         int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
         int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
-        int islandHeight = expanded
-                ? (baseOverlayHeight > 0 ? baseOverlayHeight : dp(180))
-                : dp(42);
         if (!expanded) {
-            // TYPE_APPLICATION_OVERLAY is below the status bar. Keep the
-            // compact island clear of notification icons when accessibility
-            // is not providing the cutout-safe coordinate space.
-            if (!DriveDeckAccessibilityService.isConnected()) {
-                return Math.max(statusBarHeight + dp(4), selected.bottom + dp(4));
-            }
-            // No modo compacto, os controlos ficam de cada lado do recorte.
-            // O vazio central deixa a câmara visível, como no Dynamic Island.
-            return Math.max(0, selected.top + (selected.height() - islandHeight) / 2);
+            return compactIslandY(selected, statusBarHeight);
         }
         return Math.max(selected.bottom + dp(4), dp(4));
+    }
+
+    /** Coordenada final da pill compacta, usada para fechar sem salto. */
+    private int compactIslandY() {
+        android.graphics.Rect selected = centralCutout();
+        if (selected == null) return topIslandY();
+        int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        int statusBarHeight = statusBarId == 0 ? dp(24) : getResources().getDimensionPixelSize(statusBarId);
+        return compactIslandY(selected, statusBarHeight);
+    }
+
+    private int compactIslandY(android.graphics.Rect selected, int statusBarHeight) {
+        if (!DriveDeckAccessibilityService.isConnected()) {
+            return Math.max(statusBarHeight + dp(4), selected.bottom + dp(4));
+        }
+        return Math.max(0, selected.top + (selected.height() - dp(42)) / 2);
     }
 
     private int cutoutGapWidth() {
@@ -1520,11 +1525,18 @@ public class OverlayService extends Service {
         // faz o assentamento elástico no seu próprio espaço.
         overlay.setPivotX(overlay.getWidth() / 2f);
         overlay.setPivotY(0f);
+        float closeTargetY = -dp(4);
+        if (!nextState && isCenterIslandPosition() && windowParams != null) {
+            // A caixa expandida e a pill compacta podem ter âncoras Y
+            // diferentes junto ao recorte. A animação termina exatamente na
+            // coordenada da pill seguinte, evitando um salto no último frame.
+            closeTargetY = compactIslandY() - windowParams.y;
+        }
         overlay.animate()
                 .alpha(nextState ? 0f : .18f)
                 .scaleX(nextState ? 1f : .38f)
                 .scaleY(nextState ? 1f : .12f)
-                .translationY(nextState ? -dp(8) : -dp(4))
+                .translationY(nextState ? -dp(8) : closeTargetY)
                 .setInterpolator(nextState
                         ? new DecelerateInterpolator(1.6f)
                         : new AccelerateInterpolator(1.6f))
