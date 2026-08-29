@@ -4,7 +4,6 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ResolveInfo
-import android.app.DownloadManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -85,6 +84,7 @@ class ComposeMainActivity : ComponentActivity() {
     private val prefs by lazy { getSharedPreferences("dashboard_auto", MODE_PRIVATE) }
     private var permissionRevision by mutableIntStateOf(0)
     private var updateInfo by mutableStateOf<UpdateChecker.UpdateInfo?>(null)
+    private var updateDownloadInProgress by mutableStateOf(false)
     private var lastUpdateCheckAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -248,6 +248,7 @@ class ComposeMainActivity : ComponentActivity() {
                     onBluetooth = { bluetoothAddress = it; prefs.edit().putString("bluetooth_device_address", it).apply() },
                     onStart = ::startCarMode,
                     updateInfo = updateInfo,
+                    updateInProgress = updateDownloadInProgress,
                     onOpenUpdate = {
                         dismissedUpdateVersion = ""
                         prefs.edit().remove(UpdateChecker.DISMISSED_UPDATE_ALERT_VERSION).apply()
@@ -264,22 +265,17 @@ class ComposeMainActivity : ComponentActivity() {
     }
 
     private fun downloadUpdate(info: UpdateChecker.UpdateInfo) {
-        val url = info.downloadUrl ?: return
-        val manager = getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
-        val previousDownload = prefs.getLong(UpdateChecker.PENDING_UPDATE_DOWNLOAD_ID, -1L)
-        if (previousDownload >= 0L) manager.remove(previousDownload)
-        UpdateChecker.clearPendingDownload(this)
-        UpdateChecker.cleanupTemporaryDownloads(this)
-        UpdateChecker.setStatus(this, "downloading", "A descarregar DriveDeck ${info.version}")
-        val request = DownloadManager.Request(Uri.parse(url))
-            .setTitle("DriveDeck ${info.version}")
-            .setDescription("A descarregar atualização")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, "drivedeck-${info.version}.apk")
-            .setMimeType("application/vnd.android.package-archive")
-        val downloadId = manager.enqueue(request)
-        UpdateChecker.markDownloadStarted(this, info.version, downloadId)
-        Toast.makeText(this, "Atualização a ser descarregada", Toast.LENGTH_LONG).show()
+        if (info.downloadUrl == null) return
+        if (updateDownloadInProgress) {
+            Toast.makeText(this, "A atualização já está a ser preparada.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        updateDownloadInProgress = true
+        Toast.makeText(this, "A preparar a atualização…", Toast.LENGTH_SHORT).show()
+        UpdateChecker.downloadAndInstall(this, info) { installed ->
+            updateDownloadInProgress = false
+            if (!installed) Toast.makeText(this, "Não foi possível abrir o instalador.", Toast.LENGTH_LONG).show()
+        }
     }
 
     @Composable
@@ -350,7 +346,7 @@ class ComposeMainActivity : ComponentActivity() {
 
     @Composable
     @OptIn(ExperimentalMaterial3Api::class)
-    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, onOpenUpdate: () -> Unit, accentKey: String, onAccent: (String) -> Unit) {
+    private fun HomeScreen(apps: List<AppItem>, bluetooth: List<BluetoothItem>, navigation: String, music: String, bluetoothAddress: String, onNavigation: (String) -> Unit, onMusic: (String) -> Unit, onBluetooth: (String) -> Unit, onStart: () -> Unit, updateInfo: UpdateChecker.UpdateInfo?, updateInProgress: Boolean, onOpenUpdate: () -> Unit, accentKey: String, onAccent: (String) -> Unit) {
         var settings by remember { mutableStateOf(false) }
         BackHandler(enabled = settings) { settings = false }
         val navigationAvailable = apps.any { it.packageName == navigation }
@@ -441,6 +437,7 @@ class ComposeMainActivity : ComponentActivity() {
                         onMusic = onMusic,
                         onBluetooth = onBluetooth,
                         updateInfo = updateInfo,
+                        updateInProgress = updateInProgress,
                         onOpenUpdate = onOpenUpdate,
                         onRefreshDiagnostics = {
                             permissionRevision++
@@ -465,6 +462,7 @@ class ComposeMainActivity : ComponentActivity() {
         onMusic: (String) -> Unit,
         onBluetooth: (String) -> Unit,
         updateInfo: UpdateChecker.UpdateInfo?,
+        updateInProgress: Boolean,
         onOpenUpdate: () -> Unit,
         onRefreshDiagnostics: () -> Unit,
         accentKey: String,
@@ -616,12 +614,12 @@ class ComposeMainActivity : ComponentActivity() {
                 }
                 AccentPicker(accentKey, onAccent)
                 updateInfo?.let { info ->
-                    OutlinedButton(onClick = onOpenUpdate, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onOpenUpdate, enabled = !updateInProgress, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Rounded.Notifications, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text("Nova versão disponível", modifier = Modifier.weight(1f))
+                        Text(if (updateInProgress) "A preparar instalação…" else "Nova versão disponível", modifier = Modifier.weight(1f))
                     }
-                    Text("DriveDeck ${info.version} pronta para descarregar", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
+                    Text(if (updateInProgress) "O instalador Android será aberto automaticamente." else "DriveDeck ${info.version} pronta para descarregar", color = Color(0xFFFFB4C1), style = MaterialTheme.typography.bodySmall)
                 }
                 Text("Apps e ligação ao carro", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 AppPicker("Navegação", apps, navigation, onNavigation, AppCategory.NAVIGATION)

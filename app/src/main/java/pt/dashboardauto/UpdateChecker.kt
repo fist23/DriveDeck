@@ -5,6 +5,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.File
+import android.os.Handler
+import android.os.Looper
 import java.util.concurrent.Executors
 
 object UpdateChecker {
@@ -83,6 +85,54 @@ object UpdateChecker {
             }
         }
     }
+
+    fun downloadAndInstall(context: Context, info: UpdateInfo, result: (Boolean) -> Unit) {
+        val downloadUrl = info.downloadUrl ?: run {
+            result(false)
+            return
+        }
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            val directory = File(context.cacheDir, TEMP_UPDATE_DIRECTORY)
+            val partial = File(directory, "drivedeck-${safeFilePart(info.version)}.apk.part")
+            val apk = File(directory, "drivedeck-${safeFilePart(info.version)}.apk")
+            try {
+                cleanupTemporaryDownloads(context)
+                if (!directory.exists() && !directory.mkdirs()) throw java.io.IOException("Cannot create update cache")
+                setStatus(context, "downloading", "A descarregar DriveDeck ${info.version}")
+                connection = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10_000
+                    readTimeout = 30_000
+                    useCaches = false
+                    setRequestProperty("Cache-Control", "no-cache")
+                    setRequestProperty("User-Agent", "DriveDeck/${BuildConfig.VERSION_NAME}")
+                }
+                if (connection.responseCode !in 200..299) throw java.io.IOException("Update download failed")
+                connection.inputStream.use { input ->
+                    partial.outputStream().use { output -> input.copyTo(output, 32 * 1024) }
+                }
+                if (!partial.isFile || partial.length() <= 0L || !partial.renameTo(apk)) {
+                    throw java.io.IOException("Incomplete update download")
+                }
+                markDownloadStarted(context, info.version, -1L)
+                Handler(Looper.getMainLooper()).post {
+                    result(UpdateDownloadReceiver.installFromCache(context, apk, info.version))
+                }
+            } catch (_: Exception) {
+                partial.delete()
+                apk.delete()
+                clearPendingDownload(context)
+                cleanupTemporaryDownloads(context)
+                setStatus(context, "failed", "Não foi possível descarregar a atualização")
+                Handler(Looper.getMainLooper()).post { result(false) }
+            } finally {
+                connection?.disconnect()
+            }
+        }
+    }
+
+    private fun safeFilePart(value: String): String = value.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
     @JvmStatic
     fun markDownloadStarted(context: Context, version: String, downloadId: Long) {

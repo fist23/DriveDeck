@@ -12,6 +12,32 @@ import java.io.IOException;
 
 /** Moves a completed update into private cache and opens Android's installer UI. */
 public final class UpdateDownloadReceiver extends BroadcastReceiver {
+    public static boolean installFromCache(Context context, File apk, String version) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26
+                    && !context.getPackageManager().canRequestPackageInstalls()) {
+                Intent permissionIntent = new Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + context.getPackageName()))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(permissionIntent);
+                UpdateChecker.setStatus(context, "failed", "Permite instalações da DriveDeck nas definições do Android");
+                return false;
+            }
+            if (!apk.isFile() || !isCompatibleApk(context, apk)) throw new IOException("Downloaded APK does not match DriveDeck signature");
+            UpdateChecker.setStatus(context, "installing", "A abrir o instalador do Android");
+            openSystemInstaller(context, apk);
+            UpdateChecker.clearPendingDownload(context);
+            return true;
+        } catch (Exception ignored) {
+            apk.delete();
+            UpdateChecker.clearPendingDownload(context);
+            UpdateChecker.cleanupTemporaryDownloads(context);
+            UpdateChecker.setStatus(context, "failed", "Não foi possível validar ou abrir o APK");
+            return false;
+        }
+    }
+
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
         if (UpdateChecker.UPDATE_INSTALL_COMPLETE_ACTION.equals(intent.getAction())) {
@@ -66,7 +92,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
             // Keep the private temporary file alive while the system installer reads it.
             // It is removed on the next download, so the update never becomes permanent
             // user storage.
-            openSystemInstaller(context, temporaryApk, apkUri);
+            openSystemInstaller(context, temporaryApk);
             manager.remove(id);
             UpdateChecker.clearPendingDownload(context);
         } catch (Exception ignored) {
@@ -130,7 +156,7 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void openSystemInstaller(Context context, File apk, Uri downloadUri) throws IOException {
+    private static void openSystemInstaller(Context context, File apk) throws IOException {
         Uri apkUri;
         try {
             apkUri = FileProvider.getUriForFile(
@@ -151,10 +177,10 @@ public final class UpdateDownloadReceiver extends BroadcastReceiver {
         } catch (RuntimeException exception) {
             // Some Android builds expose the package installer only for ACTION_VIEW.
             Intent fallback = new Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(downloadUri, "application/vnd.android.package-archive")
+                    .setDataAndType(apkUri, "application/vnd.android.package-archive")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            fallback.setClipData(android.content.ClipData.newRawUri("DriveDeck update", downloadUri));
+            fallback.setClipData(android.content.ClipData.newRawUri("DriveDeck update", apkUri));
             try {
                 context.startActivity(fallback);
             } catch (RuntimeException fallbackException) {
